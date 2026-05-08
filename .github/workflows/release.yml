@@ -31,7 +31,7 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -75,7 +75,7 @@ jobs:
           cat LP-700-App-${{ steps.ver.outputs.value }}.dmg.sha256
 
       - name: Upload artifacts (workflow-scoped, for in-flight inspection)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: LP-700-App-${{ steps.ver.outputs.value }}
           path: |
@@ -84,7 +84,7 @@ jobs:
           retention-days: 30
 
       - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: ${{ steps.ver.outputs.value }}
           tag_name: ${{ steps.ver.outputs.tag }}
