@@ -1,0 +1,6 @@
+Target
+https://github.com/VU3ESV/LP-700-Server
+
+References
+https://github.com/VU3ESV/LP-100A-App
+https://github.com/VU3ESV/LP-100A-Server

@@ -1,0 +1,320 @@
+import SwiftUI
+import AppKit
+
+struct ContentView: View {
+    @ObservedObject var vm: MeterViewModel
+    @AppStorage("serverURL") private var persistedURL: String = ""
+
+    var body: some View {
+        Group {
+            if vm.connectionSheetOpen || (!vm.hasConfiguredServer && persistedURL.isEmpty) {
+                ConnectionPlaceholder(vm: vm)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                meterPane
+            }
+        }
+        .navigationTitle(vm.serverTitle)
+        .toolbar { mainToolbar }
+        .sheet(isPresented: $vm.connectionSheetOpen) {
+            ConnectionSheet(vm: vm) { vm.connectionSheetOpen = false }
+        }
+        .frame(minWidth: 720, minHeight: 600)
+        .background(Color(NSColor.windowBackgroundColor))
+    }
+
+    // MARK: - Toolbar
+
+    @ToolbarContentBuilder
+    private var mainToolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            ConnectionBadge(state: vm.connection, host: hostHint)
+                .help(hostHint)
+        }
+
+        ToolbarItem(placement: .principal) {
+            BackendBadge(backend: vm.backend)
+        }
+
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                vm.connectionSheetOpen = true
+            } label: {
+                Image(systemName: "network.badge.shield.half.filled")
+                    .help("Server connection settings")
+            }
+        }
+
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                vm.toggleSetup()
+                if vm.setupOpen {
+                    Task { await vm.refreshLogLevel() }
+                }
+            } label: {
+                Image(systemName: vm.setupOpen ? "wrench.and.screwdriver.fill" : "wrench.and.screwdriver")
+                    .help("Open SETUP overlay")
+            }
+        }
+    }
+
+    private var hostHint: String {
+        if let url = URL(string: vm.serverURLString), let host = url.host {
+            let port = url.port.map { ":\($0)" } ?? ""
+            return "\(host)\(port)"
+        }
+        return "Not configured"
+    }
+
+    // MARK: - Main pane
+
+    private var meterPane: some View {
+        ScrollView {
+            VStack(spacing: 14) {
+                if let banner = vm.statusBanner {
+                    BannerLabel(text: banner)
+                }
+
+                Panel {
+                    VStack(alignment: .leading, spacing: 16) {
+                        PanelHeader(
+                            title: vm.setupOpen ? "Setup overlay" : "Power & SWR",
+                            trailing: callsignAccessory
+                        )
+                        Divider()
+                        activeView
+                    }
+                }
+
+                Panel {
+                    VStack(alignment: .leading, spacing: 12) {
+                        statusRow
+                        Divider()
+                        KeypadView(vm: vm)
+                    }
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: 880)
+            .frame(maxWidth: .infinity)
+        }
+        .background(Color(NSColor.windowBackgroundColor))
+    }
+
+    @ViewBuilder
+    private var activeView: some View {
+        if vm.setupOpen {
+            SetupOverlay(vm: vm)
+        } else {
+            PowerSWRView(vm: vm)
+        }
+    }
+
+    private var callsignAccessory: AnyView? {
+        let cs = vm.snapshot?.callsign.trimmingCharacters(in: .whitespaces) ?? ""
+        guard !cs.isEmpty else { return nil }
+        return AnyView(
+            Text(cs)
+                .font(.system(.subheadline, design: .monospaced))
+                .foregroundStyle(.secondary)
+        )
+    }
+
+    private var statusRow: some View {
+        HStack(spacing: 18) {
+            statusItem(label: "Coupler",
+                       value: vm.snapshot?.coupler.isEmpty == false
+                              ? (vm.snapshot?.coupler ?? "—") : "—")
+            statusItem(label: "Power mode",
+                       value: powerModeLabel)
+            statusItem(label: "Top mode",
+                       value: topModeLabel)
+            statusItem(label: "Firmware",
+                       value: vm.snapshot?.firmwareRev.isEmpty == false
+                              ? (vm.snapshot?.firmwareRev ?? "—") : "—")
+            Spacer()
+            if vm.connection != .connected {
+                Label("Not connected", systemImage: "wifi.slash")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var powerModeLabel: String {
+        switch vm.snapshot?.powerMode {
+        case .net: return "Net (F−R)"
+        case .delivered: return "Delivered (F+R)"
+        case .forward: return "Forward"
+        case nil: return "—"
+        }
+    }
+
+    private var topModeLabel: String {
+        switch vm.snapshot?.topMode {
+        case .powerSWR: return "Power / SWR"
+        case .waveform: return "Waveform"
+        case .spectrum: return "Spectrum"
+        case .setup: return "Setup"
+        case nil: return "—"
+        }
+    }
+
+    private func statusItem(label: String, value: String, tint: Color = .primary) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.body.weight(.medium))
+                .foregroundColor(tint)
+                .monospacedDigit()
+        }
+    }
+}
+
+// MARK: - Toolbar pieces
+
+private struct ConnectionBadge: View {
+    var state: WSClient.ConnectionState
+    var host: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(color)
+                .frame(width: 8, height: 8)
+                .shadow(color: color.opacity(0.7), radius: state == .connected ? 3 : 0)
+            Text(label)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.primary)
+            Text(host)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+    }
+
+    private var color: Color {
+        switch state {
+        case .connected: return .green
+        case .reconnecting: return .yellow
+        case .disconnected: return .red
+        }
+    }
+
+    private var label: String {
+        switch state {
+        case .connected: return "Connected"
+        case .reconnecting: return "Reconnecting"
+        case .disconnected: return "Offline"
+        }
+    }
+}
+
+private struct BackendBadge: View {
+    var backend: String
+
+    var body: some View {
+        if backend.isEmpty || backend == "unknown" {
+            EmptyView()
+        } else {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 11))
+                Text(label)
+                    .font(.system(size: 11, weight: .semibold))
+                    .tracking(0.06 * 11)
+                    .textCase(.uppercase)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .foregroundColor(tint)
+            .background(
+                RoundedRectangle(cornerRadius: 999)
+                    .strokeBorder(tint.opacity(0.5), lineWidth: 1)
+            )
+            .help(helpText)
+        }
+    }
+
+    private var icon: String {
+        switch backend {
+        case "hid": return "cable.connector.horizontal"
+        case "simulator": return "waveform.badge.exclamationmark"
+        default: return "questionmark.circle"
+        }
+    }
+
+    private var tint: Color {
+        switch backend {
+        case "hid": return .green
+        case "simulator": return .yellow
+        default: return .secondary
+        }
+    }
+
+    private var label: String {
+        switch backend {
+        case "hid": return "HID"
+        case "simulator": return "Simulator"
+        default: return backend
+        }
+    }
+
+    private var helpText: String {
+        switch backend {
+        case "hid": return "Server is reading the LP-500/700 over USB HID"
+        case "simulator": return "Server is emitting synthesised data — no real meter attached"
+        default: return "Backend: \(backend)"
+        }
+    }
+}
+
+private struct BannerLabel: View {
+    var text: String
+    var body: some View {
+        Label(text, systemImage: "exclamationmark.triangle.fill")
+            .font(.subheadline)
+            .foregroundStyle(.orange)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.orange.opacity(0.08))
+            )
+    }
+}
+
+// MARK: - First-launch placeholder
+
+struct ConnectionPlaceholder: View {
+    @ObservedObject var vm: MeterViewModel
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                .font(.system(size: 56, weight: .light))
+                .foregroundStyle(.secondary)
+            Text("No server connected")
+                .font(.title2.weight(.semibold))
+            Text("Configure the URL of your LP-700 WebSocket server to begin streaming telemetry from the Telepost LP-500 / LP-700 station monitor.")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 380)
+            Button {
+                vm.connectionSheetOpen = true
+            } label: {
+                Text("Connect…").frame(minWidth: 100)
+            }
+            .controlSize(.large)
+            .buttonStyle(.borderedProminent)
+            .keyboardShortcut(.defaultAction)
+        }
+        .padding(40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(NSColor.windowBackgroundColor))
+    }
+}

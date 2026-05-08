@@ -1,0 +1,108 @@
+name: Release
+
+# Triggered two ways:
+#   1. Push a `vX.Y.Z` tag — produces a public GitHub Release with the DMG
+#      and SHA-256 checksum attached, auto-generated release notes from
+#      the previous tag's commits.
+#   2. Manual `workflow_dispatch` with a version input — produces a
+#      build-only artifact (no Release object) that you can download from
+#      the Actions run. Useful for testing the workflow without cutting
+#      a public tag.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g. 0.1.0). Used as CFBundleShortVersionString. Does not create a git tag.'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            V="${{ inputs.version }}"
+          else
+            V="${GITHUB_REF_NAME#v}"
+          fi
+          echo "value=$V" >> "$GITHUB_OUTPUT"
+          echo "Building release $V"
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Test
+        run: swift test
+
+      - name: Build universal .app
+        env:
+          VERSION: ${{ steps.ver.outputs.value }}
+        run: ./scripts/build-app.sh
+
+      - name: Build DMG
+        env:
+          VERSION: ${{ steps.ver.outputs.value }}
+        run: ./scripts/make-dmg.sh
+
+      - name: Compute checksums
+        working-directory: dist
+        run: |
+          shasum -a 256 LP-700-App-${{ steps.ver.outputs.value }}.dmg \
+            > LP-700-App-${{ steps.ver.outputs.value }}.dmg.sha256
+          cat LP-700-App-${{ steps.ver.outputs.value }}.dmg.sha256
+
+      - name: Upload artifacts (always, even without a tag)
+        uses: actions/upload-artifact@v4
+        with:
+          name: LP-700-App-${{ steps.ver.outputs.value }}
+          path: |
+            dist/LP-700-App-*.dmg
+            dist/LP-700-App-*.dmg.sha256
+          retention-days: 30
+
+      - name: Create GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.ver.outputs.value }}
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            ## LP-700-App ${{ steps.ver.outputs.value }}
+
+            macOS native client for the [LP-700 WebSocket Server](https://github.com/VU3ESV/LP-700-Server).
+
+            ### Install
+
+            1. Download `LP-700-App-${{ steps.ver.outputs.value }}.dmg` below.
+            2. Open the DMG and drag **LP-700-App.app** to **/Applications**.
+            3. **One-time Gatekeeper bypass** (this build is ad-hoc-signed, not Apple-notarized):
+               ```sh
+               xattr -dr com.apple.quarantine /Applications/LP-700-App.app
+               ```
+            4. Launch normally.
+
+            See [README](https://github.com/${{ github.repository }}#install) and
+            [ARCHITECTURE.md](https://github.com/${{ github.repository }}/blob/main/ARCHITECTURE.md).
+          files: |
+            dist/LP-700-App-*.dmg
+            dist/LP-700-App-*.dmg.sha256
