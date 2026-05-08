@@ -33,7 +33,7 @@ struct MenuBarContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             row("Avg",   value: power(vm.snapshot?.powerAvgW))
-            row("Peak",  value: power(vm.snapshot?.powerPeakW))
+            row("Peak",  value: power(vm.snapshot?.displayedPeakW))
             row("SWR",   value: vm.snapshot.map { String(format: "%.2f", $0.swr) } ?? "—")
             row("Range", value: vm.snapshot?.range ?? "—")
             row("CH",    value: channelLabel)

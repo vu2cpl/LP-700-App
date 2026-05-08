@@ -121,6 +121,56 @@ final class WireProtocolTests: XCTestCase {
         XCTAssertEqual(json["type"] as? String, "resync")
     }
 
+    // MARK: - displayedPeakW selection
+
+    /// Mirrors the server's embedded web client (index.html) which now
+    /// shows `peak_hold_w` in Peak Hold mode and `power_peak_w`
+    /// elsewhere. See LP-700-Server commit fc9bde0.
+    func testDisplayedPeakWSelection() throws {
+        // Helper: decode a synthesised telemetry frame into Snapshot.
+        func snap(peakMode: String, peakHoldW: Double, powerPeakW: Double) throws -> Snapshot {
+            let data = """
+            {"type":"telemetry","seq":1,"ts":"x","data":{
+              "channel":1,"auto_channel":false,
+              "power_avg_w":50,"power_peak_w":\(powerPeakW),"peak_hold_w":\(peakHoldW),
+              "swr":1.1,"range":"100W",
+              "peak_mode":"\(peakMode)","power_mode":"net",
+              "alarm_enabled":false,"alarm_power_w":0,"alarm_swr":0,"alarm_tripped":false,
+              "callsign":"","coupler":"","top_mode":"power_swr","firmware_rev":"",
+              "status_message":""
+            }}
+            """.data(using: .utf8)!
+            let frame = try JSONDecoder().decode(ServerFrame.self, from: data)
+            guard case .telemetry(_, _, let s) = frame else {
+                throw NSError(domain: "test", code: 0)
+            }
+            return s
+        }
+
+        // Peak Hold mode + held peak present → show held peak.
+        var s = try snap(peakMode: "peak_hold", peakHoldW: 250, powerPeakW: 110)
+        XCTAssertEqual(s.displayedPeakW, 250, accuracy: 0.01,
+                       "peak_hold mode must surface peak_hold_w")
+
+        // Peak Hold mode + held peak unpopulated (older server build, or
+        // genuinely zero) → fall back to live envelope peak.
+        s = try snap(peakMode: "peak_hold", peakHoldW: 0, powerPeakW: 110)
+        XCTAssertEqual(s.displayedPeakW, 110, accuracy: 0.01,
+                       "peak_hold mode + zero held peak must fall back to power_peak_w")
+
+        // Average mode → always show live peak, even when peak_hold_w
+        // happens to be populated (the firmware keeps it updated
+        // regardless of display mode, per LP-500_VM v1.080 dumps).
+        s = try snap(peakMode: "average", peakHoldW: 250, powerPeakW: 110)
+        XCTAssertEqual(s.displayedPeakW, 110, accuracy: 0.01,
+                       "average mode must show power_peak_w regardless of peak_hold_w")
+
+        // Tune mode → same rule as Average.
+        s = try snap(peakMode: "tune", peakHoldW: 999, powerPeakW: 5)
+        XCTAssertEqual(s.displayedPeakW, 5, accuracy: 0.01,
+                       "tune mode must show power_peak_w")
+    }
+
     func testRangeNamesMatchServer() {
         // Must mirror RANGE_NAMES in the server's embedded web client
         // (internal/web/static/index.html). If the server's order changes,

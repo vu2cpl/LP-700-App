@@ -79,6 +79,24 @@ struct Snapshot: Codable, Equatable {
         case statusMessage = "status_message"
     }
 
+    /// Power value to display in the "Peak power" readout. Mirrors the
+    /// server's embedded web client (index.html, render()): in
+    /// `peak_hold` mode show the firmware-maintained held peak from
+    /// bytes 0-1 (`peak_hold_w`); in `average` / `tune` show the live
+    /// envelope peak from bytes 23-24 (`power_peak_w`). Falls back to
+    /// the live value when `peak_hold_w` is 0 — covers older server
+    /// builds that hadn't yet decoded bytes 0-1, and the trivial case
+    /// where no peak has been observed yet.
+    ///
+    /// See LP-700-Server commit fc9bde0 ("fix: Peak Hold now actually
+    /// holds in the web UI") for the wire-side change this mirrors.
+    var displayedPeakW: Double {
+        if peakMode == .peakHold, peakHoldW > 0 {
+            return peakHoldW
+        }
+        return powerPeakW
+    }
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         channel        = (try? c.decode(Int.self, forKey: .channel)) ?? 0

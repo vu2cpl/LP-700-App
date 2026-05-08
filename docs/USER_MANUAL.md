@@ -97,7 +97,15 @@ meter's display mode, matching the small "57 AV / 94 PK" LCD
 indicators that are always visible on the front panel.
 
 - **Average power** — large blue numeric, units auto-scale (W → kW).
-- **Peak power** — sticky maximum, decays after 1.5 s of no new max.
+- **Peak power** — what shows here depends on the meter's current
+  Peak/Avg/Tune mode, mirroring the meter's own LCD:
+  - **Peak Hold mode** — the firmware-maintained held peak. Sticks at
+    the maximum until you change mode or clear it on the meter; this
+    is the "held" value the meter advertises in Peak Hold mode.
+  - **Average / Tune mode** — the live envelope peak this poll cycle.
+    Drops to zero on key-up, mirrors the meter's small `PK` indicator.
+  - If the server is an older build that hasn't decoded the held-peak
+    field yet, the app falls back to live envelope peak in all modes.
 - **SWR** — coloured by severity:
   - **green** ≤ 1.5
   - **yellow** 1.5 – 2.0

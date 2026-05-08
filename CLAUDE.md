@@ -113,7 +113,7 @@ LP-700-App/
 
 `Snapshot` is 1:1 with the server's `internal/lpmeter/snapshot.go`:
 
-- Power: `power_avg_w`, `power_peak_w`, `peak_hold_w` (sim only at v0.1)
+- Power: `power_avg_w` (live), `power_peak_w` (live envelope peak — bytes 23-24), `peak_hold_w` (firmware-maintained held peak — bytes 0-1; populated by both real HID and simulator backends as of LP-700-Server fc9bde0)
 - SWR: `swr` — severity tint thresholds 1.5 / 2.0
 - Channel: `channel` (1..4) + `auto_channel` (bool)
 - Range: `range` ("auto" / "5W" / "10W" / … / "10K")
@@ -158,9 +158,14 @@ checkbox to keep the new tag out of "latest".
   numeric `channel` may still hold the *currently active* slot. UI
   should show "CH Auto" highlighted, not "CH N". `PowerSWRView`
   handles this with `data.autoChannel == true ? autoActive : (!data.autoChannel && data.channel == i)`.
-- **`peak_hold_w` is simulator-only at server v0.1.** The HID decoder
-  doesn't fill it yet (see `internal/lpmeter/snapshot.go` doc comment).
-  Don't tie UI to it being non-zero.
+- **Peak Power display follows `peak_mode`.** The wire frame carries
+  two distinct fields: `power_peak_w` (live envelope peak, bytes 23-24,
+  decays on key-up) and `peak_hold_w` (firmware-maintained held peak,
+  bytes 0-1, sticky until cleared on the meter). The "Peak power"
+  readout selects between them via `Snapshot.displayedPeakW`: held in
+  Peak Hold mode, live in Average/Tune. Mirrors index.html's render()
+  so app + web client stay aligned. Falls back to `power_peak_w` if
+  `peak_hold_w` is 0 (older server build, or no peak observed yet).
 - **`status_message` empties on TX-end.** When the meter clears its
   alert ASCII, the server sends `status_message: ""`. The UI hides
   the banner when empty — don't show a stale message.

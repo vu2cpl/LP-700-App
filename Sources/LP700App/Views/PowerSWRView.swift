@@ -13,7 +13,7 @@ struct PowerSWRView: View {
                             value: formatPower(vm.snapshot?.powerAvgW),
                             tint: .accentColor)
                 ReadingCard(label: "Peak power",
-                            value: formatPower(vm.snapshot?.powerPeakW),
+                            value: formatPower(vm.snapshot?.displayedPeakW),
                             tint: .accentColor)
             }
 
