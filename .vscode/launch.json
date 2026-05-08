@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:LP-700-App}",
+            "name": "Debug LP-700-App",
+            "target": "LP-700-App",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug LP-700-App"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:LP-700-App}",
+            "name": "Release LP-700-App",
+            "target": "LP-700-App",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release LP-700-App"
+        }
+    ]
+}
