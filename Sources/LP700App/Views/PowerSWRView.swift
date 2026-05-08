@@ -120,13 +120,15 @@ struct PowerSWRView: View {
         }
     }
 
-    // Fallback when range is "auto" or unknown: snap to the smallest
-    // standard scale that comfortably contains the highest power seen
-    // in the current snapshot. Floor at 100W so the bar is stable
-    // (doesn't jump to 5W) when the meter is idle.
+    // Fallback when range is "auto" or unknown (the typical CH Auto
+    // case): pick the smallest standard scale that comfortably contains
+    // the highest power seen — same idea as the meter's hardware
+    // auto-range. peakHoldW is the firmware-maintained sticky peak,
+    // which gives a stable scale across the natural envelope of a
+    // transmission rather than flicking with every snapshot.
     private func autoScale(_ snap: Snapshot?) -> Double {
-        let peak = max(snap?.powerPeakW ?? 0, snap?.peakHoldW ?? 0, snap?.powerAvgW ?? 0)
-        let standards: [Double] = [100, 250, 500, 1000, 2500, 5000, 10000]
+        let peak = max(snap?.powerPeakW ?? 0, snap?.peakHoldW ?? 0, snap?.powerAvgW ?? 0, vm.peakPeak)
+        let standards: [Double] = [5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
         return standards.first(where: { $0 >= peak }) ?? 10000
     }
 }

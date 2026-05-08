@@ -171,9 +171,24 @@ checkbox to keep the new tag out of "latest".
   the banner when empty — don't show a stale message.
 - **The server fans out a snapshot on connect.** Don't issue `resync`
   preemptively on connect — the hub already does it.
-- **No bargraphs yet.** `PowerSWRView` is large numeric readouts only.
-  Bargraphs are an explicit v0.2 follow-up; LP-100A-App's
-  `BargraphView.swift` is the model to port.
+- **Range and Alarm are per-channel; firmware ignores them in
+  auto-channel mode.** F3 (`range_step`) and F4 (`alarm_toggle`) are
+  silently dropped by the LP-500/700 firmware when `auto_channel == true`.
+  The server NACKs both verbs in this state with a reason (surfaces in
+  `MeterViewModel.statusBanner`); the UI also greys out the Range / Alarm
+  controls in `PowerSWRView` and `KeypadView` when `autoChannel == true`,
+  with a caption pointing at CH 1–4. Channel pills stay enabled so the
+  user can switch out. Only `range_step` and `alarm_toggle` are gated —
+  `peak_toggle`, `channel_step`, `mode_step` work in any channel state.
+- **Power-scale bars in Avg/Peak cards.** `PowerSWRView` renders a
+  horizontal scale bar inside the Average and Peak power cards
+  (cyan / orange, with yellow ≥80 % and red ≥95 % overload tinting).
+  Full-scale derives from the meter's reported `range` (5W..10K) when
+  fixed; when `range == "auto"` (typical CH-Auto case) `autoScale()`
+  picks the smallest standard scale ≥ the highest power in the current
+  snapshot, using `peakHoldW` and the VM's decayed `peakPeak` as sticky
+  inputs to keep the scale stable across a transmission envelope.
+  Mirrors how the meter's hardware auto-range chooses scale.
 
 ## Sources / links
 
