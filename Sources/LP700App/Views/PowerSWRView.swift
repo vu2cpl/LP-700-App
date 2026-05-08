@@ -11,10 +11,12 @@ struct PowerSWRView: View {
             HStack(alignment: .top, spacing: 14) {
                 ReadingCard(label: "Average power",
                             value: formatPower(vm.snapshot?.powerAvgW),
-                            tint: .accentColor)
+                            tint: .accentColor,
+                            bar: powerBar(for: vm.snapshot?.powerAvgW, baseTint: .cyan))
                 ReadingCard(label: "Peak power",
                             value: formatPower(vm.snapshot?.displayedPeakW),
-                            tint: .accentColor)
+                            tint: .accentColor,
+                            bar: powerBar(for: vm.snapshot?.displayedPeakW, baseTint: .orange))
             }
 
             HStack(alignment: .top, spacing: 14) {
@@ -93,6 +95,40 @@ struct PowerSWRView: View {
         if swr >= 1.5 { return .yellow }
         return .green
     }
+
+    private func powerBar(for watts: Double?, baseTint: Color) -> ReadingCard.BarConfig {
+        let scale = fullScaleW(vm.snapshot?.range) ?? autoScale(vm.snapshot)
+        let w = watts ?? 0
+        return ReadingCard.BarConfig(fraction: w / scale, scale: scale, baseTint: baseTint)
+    }
+
+    private func fullScaleW(_ range: String?) -> Double? {
+        guard let r = range?.lowercased(), !r.isEmpty, r != "auto" else { return nil }
+        switch r {
+        case "5w":   return 5
+        case "10w":  return 10
+        case "25w":  return 25
+        case "50w":  return 50
+        case "100w": return 100
+        case "250w": return 250
+        case "500w": return 500
+        case "1k":   return 1000
+        case "2.5k": return 2500
+        case "5k":   return 5000
+        case "10k":  return 10000
+        default:     return nil
+        }
+    }
+
+    // Fallback when range is "auto" or unknown: snap to the smallest
+    // standard scale that comfortably contains the highest power seen
+    // in the current snapshot. Floor at 100W so the bar is stable
+    // (doesn't jump to 5W) when the meter is idle.
+    private func autoScale(_ snap: Snapshot?) -> Double {
+        let peak = max(snap?.powerPeakW ?? 0, snap?.peakHoldW ?? 0, snap?.powerAvgW ?? 0)
+        let standards: [Double] = [100, 250, 500, 1000, 2500, 5000, 10000]
+        return standards.first(where: { $0 >= peak }) ?? 10000
+    }
 }
 
 // MARK: - Pieces
@@ -101,6 +137,13 @@ private struct ReadingCard: View {
     var label: String
     var value: (value: String, unit: String)
     var tint: Color
+    var bar: BarConfig? = nil
+
+    struct BarConfig {
+        var fraction: Double
+        var scale: Double
+        var baseTint: Color
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -116,6 +159,13 @@ private struct ReadingCard: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            if let bar {
+                PowerBar(fraction: bar.fraction, baseTint: bar.baseTint)
+                Text("0 / \(formatScale(bar.scale))")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
@@ -127,6 +177,36 @@ private struct ReadingCard: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(Color.secondary.opacity(0.15), lineWidth: 0.5)
         )
+    }
+
+    private func formatScale(_ w: Double) -> String {
+        if w >= 1000 { return String(format: "%g kW", w / 1000.0) }
+        return String(format: "%g W", w)
+    }
+}
+
+private struct PowerBar: View {
+    var fraction: Double
+    var baseTint: Color
+
+    var body: some View {
+        let f = max(0, min(1, fraction))
+        let color: Color = {
+            if fraction >= 0.95 { return .red }
+            if fraction >= 0.80 { return .yellow }
+            return baseTint
+        }()
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.secondary.opacity(0.18))
+                Capsule()
+                    .fill(color.gradient)
+                    .frame(width: max(2, geo.size.width * f))
+            }
+        }
+        .frame(height: 8)
+        .animation(.easeOut(duration: 0.15), value: fraction)
     }
 }
 
