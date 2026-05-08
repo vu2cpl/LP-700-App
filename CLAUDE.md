@@ -147,9 +147,10 @@ git push origin v0.1.0
 ```
 
 Or manually from the GitHub Actions UI: **Actions → Release → Run
-workflow**, enter a version like `0.1.0-test`. The workflow builds the
-same DMG but uploads as a 30-day artifact instead of cutting a public
-Release — useful for verifying the workflow without committing to a tag.
+workflow**, enter a version like `0.1.0`. The workflow creates the
+matching `v0.1.0` tag at the current commit and cuts the same kind
+of public Release the tag-push path does. Tick the **prerelease**
+checkbox to keep the new tag out of "latest".
 
 ## Things to watch out for
 

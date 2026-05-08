@@ -157,12 +157,17 @@ The workflow:
    notes from the previous tag's commits, and attaches `LP-700-App-0.1.0.dmg`
    plus its `.sha256`.
 
-### 2. Manual dispatch (build artifact, no Release object)
+### 2. Manual dispatch (also creates a Release; tag is created at the run's commit)
 
 From the GitHub Actions UI: **Actions → Release → Run workflow**. Enter
-a version string (e.g. `0.1.0-test`). The workflow builds the same DMG
-but uploads it as a 30-day artifact instead of cutting a public release —
-useful for verifying the workflow before tagging.
+a version string (e.g. `0.1.0`). The workflow creates the matching
+`v0.1.0` git tag at `HEAD` of `main` and cuts the same kind of public
+Release the tag-push path does. Tick the **prerelease** checkbox if
+you don't want the new tag to become `latest`.
+
+Because manual dispatch creates a real tag, re-running with the same
+version will fail (the tag already exists). Bump the version or delete
+the old tag first.
 
 CI smoke-builds the same `.app` on every push and PR, so a tag push
 that gets to the release stage is already known to compile and pass tests.

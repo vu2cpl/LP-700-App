@@ -274,8 +274,11 @@ CI:
   smoke build the `.app` on every push and PR. Runs on `macos-14`.
 - `.github/workflows/release.yml` — triggered by pushing a `v*` tag
   *or* by manual `workflow_dispatch` with a version input. Builds the
-  DMG, computes the SHA-256, uploads as an artifact, and (on tag push
-  only) creates a public Release with auto-generated notes.
+  DMG, computes the SHA-256, uploads as a workflow artifact, and
+  creates a public GitHub Release with auto-generated notes. For
+  manual dispatch the workflow also creates the matching `vX.Y.Z`
+  tag at the run's commit; pass `prerelease: true` to keep it from
+  becoming `latest`.
 
 ## 10. Risks & follow-ups
 

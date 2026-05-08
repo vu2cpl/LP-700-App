@@ -1,13 +1,11 @@
 name: Release
 
-# Triggered two ways:
-#   1. Push a `vX.Y.Z` tag — produces a public GitHub Release with the DMG
-#      and SHA-256 checksum attached, auto-generated release notes from
-#      the previous tag's commits.
-#   2. Manual `workflow_dispatch` with a version input — produces a
-#      build-only artifact (no Release object) that you can download from
-#      the Actions run. Useful for testing the workflow without cutting
-#      a public tag.
+# Triggered two ways, both of which produce a public GitHub Release:
+#   1. Push a `vX.Y.Z` tag — uses the tag as-is.
+#   2. Manual `workflow_dispatch` with a version input — the workflow
+#      creates the matching `vX.Y.Z` tag at the run's commit and cuts a
+#      Release pointed at it. Set `prerelease: true` if you don't want
+#      the new tag to become "latest".
 
 on:
   push:
@@ -16,9 +14,14 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag (e.g. 0.1.0). Used as CFBundleShortVersionString. Does not create a git tag.'
+        description: 'Version (e.g. 0.1.0). A matching git tag `vX.Y.Z` is created at the current commit.'
         required: true
         type: string
+      prerelease:
+        description: 'Mark this release as a pre-release (so it does not become "latest").'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -32,7 +35,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Resolve version
+      - name: Resolve version + tag
         id: ver
         run: |
           if [ -n "${{ inputs.version }}" ]; then
@@ -40,8 +43,11 @@ jobs:
           else
             V="${GITHUB_REF_NAME#v}"
           fi
+          # `softprops/action-gh-release` creates the tag if it does not
+          # exist yet, so we just need a stable `vX.Y.Z` string.
           echo "value=$V" >> "$GITHUB_OUTPUT"
-          echo "Building release $V"
+          echo "tag=v$V" >> "$GITHUB_OUTPUT"
+          echo "Building release v$V"
 
       - name: Show toolchain
         run: |
@@ -68,7 +74,7 @@ jobs:
             > LP-700-App-${{ steps.ver.outputs.value }}.dmg.sha256
           cat LP-700-App-${{ steps.ver.outputs.value }}.dmg.sha256
 
-      - name: Upload artifacts (always, even without a tag)
+      - name: Upload artifacts (workflow-scoped, for in-flight inspection)
         uses: actions/upload-artifact@v4
         with:
           name: LP-700-App-${{ steps.ver.outputs.value }}
@@ -78,13 +84,13 @@ jobs:
           retention-days: 30
 
       - name: Create GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ steps.ver.outputs.value }}
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ steps.ver.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           draft: false
-          prerelease: false
+          prerelease: ${{ inputs.prerelease == true }}
           generate_release_notes: true
           body: |
             ## LP-700-App ${{ steps.ver.outputs.value }}
