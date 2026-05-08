@@ -14,6 +14,7 @@ struct LP700App: App {
     var body: some Scene {
         WindowGroup {
             ContentView(vm: vm)
+                .background(OpenPrefsCapture())
                 .task { await bootstrap() }
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                     if vm.connection == .connected { vm.resync() }
@@ -54,6 +55,19 @@ struct LP700App: App {
             // First launch — open the Connect sheet automatically.
             vm.connectionSheetOpen = true
         }
+        // Screenshot/debug launch flags. Used by docs/screenshots regeneration.
+        // `open -a LP-700-App --args --open-setup` flips the SETUP overlay on
+        // immediately after bootstrap so the docs script can capture it
+        // without UI scripting / accessibility permission. Same idea for
+        // `--open-prefs`, which dispatches the standard Settings selector.
+        if CommandLine.arguments.contains("--open-setup") {
+            vm.setupOpen = true
+            await vm.refreshLogLevel()
+        }
+        // `--open-prefs` triggering is wired through the SwiftUI
+        // openSettings environment action, captured in OpenPrefsCapture
+        // below — macOS 14+ removed the legacy showSettingsWindow: action
+        // selector path.
     }
 
     private func requestNotificationPermission() {
@@ -110,6 +124,50 @@ struct LP700App: App {
             NSApp.activate(ignoringOtherApps: true)
         } else {
             NSApp.activate(ignoringOtherApps: true)
+        }
+    }
+}
+
+// Invisible helper that captures the `\.openSettings` SwiftUI environment
+// action so the screenshot driver can pop the Settings window via a
+// launch flag. No effect at runtime unless `--open-prefs` is on argv.
+//
+// `\.openSettings` is macOS 14+ only; the macOS 13 fallback is the legacy
+// `showPreferencesWindow:` action selector. Either path no-ops cleanly
+// when the launch flag isn't set.
+private struct OpenPrefsCapture: View {
+    var body: some View {
+        Group {
+            if #available(macOS 14.0, *) {
+                ModernCapture()
+            } else {
+                Color.clear.frame(width: 0, height: 0)
+                    .onAppear { LegacyOpenPrefs.tryOpen() }
+            }
+        }
+    }
+
+    @available(macOS 14.0, *)
+    private struct ModernCapture: View {
+        @Environment(\.openSettings) private var openSettings
+        var body: some View {
+            Color.clear.frame(width: 0, height: 0)
+                .onAppear {
+                    guard CommandLine.arguments.contains("--open-prefs") else { return }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                        openSettings()
+                    }
+                }
+        }
+    }
+
+    private enum LegacyOpenPrefs {
+        static func tryOpen() {
+            guard CommandLine.arguments.contains("--open-prefs") else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                NSApp.activate(ignoringOtherApps: true)
+                _ = NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
+            }
         }
     }
 }

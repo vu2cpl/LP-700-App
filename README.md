@@ -185,8 +185,10 @@ that gets to the release stage is already known to compile and pass tests.
   JSON shape and the `command` / `resync` verbs handled by
   `internal/hub/hub.go`.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the layering, concurrency
-model, and risk register.
+- [**User manual**](docs/USER_MANUAL.md) — installation walkthrough,
+  view-by-view tour with screenshots, keyboard shortcuts, troubleshooting.
+- [**Architecture review**](ARCHITECTURE.md) — layered design, concurrency
+  model, connection lifecycle, risks.
 
 ## Project layout
 
