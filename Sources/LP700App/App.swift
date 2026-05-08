@@ -128,47 +128,31 @@ struct LP700App: App {
     }
 }
 
-// Invisible helper that captures the `\.openSettings` SwiftUI environment
-// action so the screenshot driver can pop the Settings window via a
-// launch flag. No effect at runtime unless `--open-prefs` is on argv.
+// Invisible helper that pops the Settings window when `--open-prefs` is
+// on argv, so the screenshot driver can capture Preferences without
+// needing Accessibility permission for `osascript` keystroke.
 //
-// `\.openSettings` is macOS 14+ only; the macOS 13 fallback is the legacy
-// `showPreferencesWindow:` action selector. Either path no-ops cleanly
-// when the launch flag isn't set.
+// Selector-based dispatch is used here rather than SwiftUI's
+// `\.openSettings` environment value: the latter is macOS 14+ only and
+// the older Xcode SDK on GitHub's `macos-14` runner refuses to resolve
+// the key path even inside an `@available` guard, breaking CI. Both
+// `showSettingsWindow:` (macOS 14+) and `showPreferencesWindow:`
+// (macOS 13) are tried — sendAction returns false cleanly when the
+// selector isn't wired up. On macOS 26+ where Apple removed both action
+// selectors, regenerate the screenshot manually with ⌘, instead.
 private struct OpenPrefsCapture: View {
     var body: some View {
-        Group {
-            if #available(macOS 14.0, *) {
-                ModernCapture()
-            } else {
-                Color.clear.frame(width: 0, height: 0)
-                    .onAppear { LegacyOpenPrefs.tryOpen() }
-            }
-        }
-    }
-
-    @available(macOS 14.0, *)
-    private struct ModernCapture: View {
-        @Environment(\.openSettings) private var openSettings
-        var body: some View {
-            Color.clear.frame(width: 0, height: 0)
-                .onAppear {
-                    guard CommandLine.arguments.contains("--open-prefs") else { return }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                        openSettings()
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onAppear {
+                guard CommandLine.arguments.contains("--open-prefs") else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    NSApp.activate(ignoringOtherApps: true)
+                    if !NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil) {
+                        _ = NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
                     }
                 }
-        }
-    }
-
-    private enum LegacyOpenPrefs {
-        static func tryOpen() {
-            guard CommandLine.arguments.contains("--open-prefs") else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                NSApp.activate(ignoringOtherApps: true)
-                _ = NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
             }
-        }
     }
 }
 

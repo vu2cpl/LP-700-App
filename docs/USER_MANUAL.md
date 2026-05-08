@@ -411,6 +411,12 @@ shortcuts for screenshot capture; nothing in the production UI
 depends on them, and they're a no-op without `argv` containing the
 flag.
 
+> **macOS 26 (Tahoe) and later.** Apple removed both
+> `showSettingsWindow:` and `showPreferencesWindow:` AppKit action
+> selectors. `--open-prefs` becomes a no-op on those releases —
+> regenerate the Preferences screenshot manually with **⌘,** while
+> the main window is foregrounded.
+
 ---
 
 ## 11. See also
