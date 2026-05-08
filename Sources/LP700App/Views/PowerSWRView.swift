@@ -21,7 +21,9 @@ struct PowerSWRView: View {
                 ReadingCard(label: "SWR",
                             value: formatSWR(vm.snapshot?.swr),
                             tint: swrTint(vm.snapshot?.swr ?? 1.0))
-                AlarmCard(snapshot: vm.snapshot, disabled: alarmDisabled) {
+                AlarmCard(snapshot: vm.snapshot,
+                          disabled: alarmDisabled,
+                          note: autoChannelLocked ? perChannelLockNote : nil) {
                     vm.sendAlarmToggle()
                 }
             }
@@ -31,7 +33,9 @@ struct PowerSWRView: View {
             }
 
             HStack(spacing: 14) {
-                RangeCard(range: vm.snapshot?.range, disabled: controlsDisabled) {
+                RangeCard(range: vm.snapshot?.range,
+                          disabled: rangeDisabled,
+                          note: autoChannelLocked ? perChannelLockNote : nil) {
                     vm.sendRangeStep()
                 }
                 PeakModeCard(snapshot: vm.snapshot, disabled: controlsDisabled) { value in
@@ -58,7 +62,19 @@ struct PowerSWRView: View {
         !vm.allowControl || vm.connection != .connected || vm.setupOpen
     }
 
-    private var alarmDisabled: Bool { controlsDisabled }
+    // Range and Alarm are per-channel settings on the LP-500/700; the
+    // firmware silently ignores both presses while the meter is in
+    // auto-channel mode. Pre-emptively gate the UI so the user sees why
+    // before clicking. (Server NACKs the same verbs, but greying out
+    // is clearer than a transient toast.)
+    private var autoChannelLocked: Bool {
+        vm.snapshot?.autoChannel == true
+    }
+
+    private var rangeDisabled: Bool { controlsDisabled || autoChannelLocked }
+    private var alarmDisabled: Bool { controlsDisabled || autoChannelLocked }
+
+    private let perChannelLockNote = "Switch to CH 1–4 to use; auto-channel locks per-channel settings."
 
     private func formatPower(_ w: Double?) -> (value: String, unit: String) {
         guard let w, !w.isNaN else { return ("—", "W") }
@@ -117,6 +133,7 @@ private struct ReadingCard: View {
 private struct AlarmCard: View {
     var snapshot: Snapshot?
     var disabled: Bool
+    var note: String?
     var onToggle: () -> Void
 
     var body: some View {
@@ -140,7 +157,7 @@ private struct AlarmCard: View {
             }
             .buttonStyle(.plain)
             .disabled(disabled)
-            Text("Numeric thresholds are set on the meter LCD and not retrievable via USB.")
+            Text(note ?? "Numeric thresholds are set on the meter LCD and not retrievable via USB.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
@@ -230,6 +247,7 @@ private struct ChannelRow: View {
 private struct RangeCard: View {
     var range: String?
     var disabled: Bool
+    var note: String?
     var onStep: () -> Void
 
     var body: some View {
@@ -249,6 +267,12 @@ private struct RangeCard: View {
             .buttonStyle(.bordered)
             .controlSize(.large)
             .disabled(disabled)
+            if let note {
+                Text(note)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -8,19 +8,22 @@ struct KeypadView: View {
 
     var body: some View {
         let disabled = !vm.allowControl || vm.connection != .connected || vm.setupOpen
+        let autoCh = vm.snapshot?.autoChannel == true
 
         HStack(spacing: 10) {
             keyButton(title: "Range",
                       systemImage: "arrow.triangle.2.circlepath",
-                      subtitle: vm.snapshot?.range ?? "—",
+                      subtitle: autoCh ? "Locked (auto-CH)" : (vm.snapshot?.range ?? "—"),
                       action: { vm.sendRangeStep() })
                 .keyboardShortcut("r", modifiers: [.command])
+                .disabled(autoCh)
 
             keyButton(title: "Alarm",
                       systemImage: alarmIcon,
-                      subtitle: alarmSubtitle,
+                      subtitle: autoCh ? "Locked (auto-CH)" : alarmSubtitle,
                       action: { vm.sendAlarmToggle() })
                 .keyboardShortcut("a", modifiers: [.command])
+                .disabled(autoCh)
 
             keyButton(title: "LCD Mode",
                       systemImage: "rectangle.3.offgrid",
