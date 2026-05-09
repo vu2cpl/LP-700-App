@@ -1,38 +1,250 @@
 import SwiftUI
 
+// MARK: - Value-typed model
+
+// Everything `PowerSWRView` needs to render, fully resolved into
+// Equatable display values. Built once in `ContentView.body` from the
+// view-model and passed in; SwiftUI's `.equatable()` then short-circuits
+// the entire `PowerSWRView` subtree (including the bargraph layout pass
+// and the ControlsCard) when the model is unchanged frame-over-frame.
+//
+// The raw `Snapshot` is deliberately *not* part of this struct — including
+// it would invalidate the model on every wire-level field change, even
+// when none of the displayed strings or quantized values moved. Instead,
+// every input the cards consume is pre-computed (rounded, formatted,
+// quantized, enum-mapped) at construction time.
+struct PowerSWRModel: Equatable {
+    var avgValue: ReadingValue
+    var peakValue: ReadingValue
+    var swrValue: ReadingValue
+    var swrTint: Color
+    var avgBar: BarConfig
+    var peakBar: BarConfig
+
+    var controls: ControlsModel
+    var statusMessage: String
+}
+
+struct ControlsModel: Equatable {
+    var channelLabel: String
+    var nextChannel: Int
+    var rangeLabel: String
+    var peakModeLabel: String
+    var nextPeakMode: Int
+    var alarmLabel: String
+    var alarmTint: Color?
+    var channelDisabled: Bool
+    var rangeDisabled: Bool
+    var peakDisabled: Bool
+    var alarmDisabled: Bool
+    var rangeNote: String?
+}
+
+struct ReadingValue: Equatable {
+    var value: String
+    var unit: String
+}
+
+struct BarConfig: Equatable {
+    var fraction: Double
+    var scale: Double
+    var baseTint: Color
+}
+
+extension PowerSWRModel {
+    /// Builds a model from a snapshot + context flags. Pure function;
+    /// safe to call on every `ContentView.body` evaluation.
+    static func make(snapshot: Snapshot?,
+                     allowControl: Bool,
+                     connected: Bool,
+                     setupOpen: Bool) -> PowerSWRModel {
+        let baseDisabled = !allowControl || !connected || setupOpen
+        let autoCh = snapshot?.autoChannel == true
+
+        let scale = fullScaleW(snapshot?.range) ?? autoScale(snapshot)
+
+        return PowerSWRModel(
+            avgValue: formatPower(snapshot?.powerAvgW),
+            peakValue: formatPower(snapshot?.displayedPeakW),
+            swrValue: formatSWR(snapshot?.swr),
+            swrTint: swrTintColor(snapshot?.swr ?? 1.0),
+            avgBar: powerBar(for: snapshot?.powerAvgW, scale: scale, baseTint: .cyan),
+            peakBar: powerBar(for: snapshot?.displayedPeakW, scale: scale, baseTint: .orange),
+            controls: ControlsModel(
+                channelLabel: channelLabel(snapshot),
+                nextChannel: nextChannel(snapshot),
+                rangeLabel: snapshot?.range ?? "—",
+                peakModeLabel: peakModeLabel(snapshot?.peakMode),
+                nextPeakMode: nextPeakMode(snapshot?.peakMode),
+                alarmLabel: alarmLabel(snapshot),
+                alarmTint: alarmTint(snapshot),
+                channelDisabled: baseDisabled,
+                rangeDisabled: baseDisabled || autoCh,
+                peakDisabled: baseDisabled,
+                alarmDisabled: baseDisabled || autoCh,
+                rangeNote: autoCh ? perChannelLockNote : nil
+            ),
+            statusMessage: snapshot?.statusMessage ?? ""
+        )
+    }
+}
+
+// MARK: - Pure helpers
+
+private let perChannelLockNote = "Switch to CH 1–4 to use; auto-channel locks per-channel settings."
+
+private func formatPower(_ w: Double?) -> ReadingValue {
+    guard let w, !w.isNaN else { return .init(value: "—", unit: "W") }
+    if w >= 1000 { return .init(value: String(format: "%.2f", w / 1000.0), unit: "kW") }
+    if w >= 100  { return .init(value: String(format: "%.0f", w), unit: "W") }
+    return .init(value: String(format: "%.1f", w), unit: "W")
+}
+
+private func formatSWR(_ s: Double?) -> ReadingValue {
+    guard let s, !s.isNaN else { return .init(value: "—", unit: "") }
+    return .init(value: String(format: "%.2f", s), unit: "")
+}
+
+private func swrTintColor(_ swr: Double) -> Color {
+    if swr >= 2.0 { return .red }
+    if swr >= 1.5 { return .yellow }
+    return .green
+}
+
+// Quantize the bar fraction to 1 % steps. The eye can't resolve finer
+// movement on a 6-pt bar, and step-quantising is what makes the
+// surrounding `Equatable` model skip body re-eval when adjacent samples
+// land in the same step.
+private func powerBar(for watts: Double?, scale: Double, baseTint: Color) -> BarConfig {
+    let w = watts ?? 0
+    let raw = w / scale
+    let quantized = (raw * 100).rounded() / 100
+    return BarConfig(fraction: quantized, scale: scale, baseTint: baseTint)
+}
+
+private func fullScaleW(_ range: String?) -> Double? {
+    guard let r = range?.lowercased(), !r.isEmpty, r != "auto" else { return nil }
+    switch r {
+    case "5w":   return 5
+    case "10w":  return 10
+    case "25w":  return 25
+    case "50w":  return 50
+    case "100w": return 100
+    case "250w": return 250
+    case "500w": return 500
+    case "1k":   return 1000
+    case "2.5k": return 2500
+    case "5k":   return 5000
+    case "10k":  return 10000
+    default:     return nil
+    }
+}
+
+// Fallback when range is "auto" or unknown (the typical CH-Auto case):
+// pick the smallest standard scale that comfortably contains the highest
+// power in the current snapshot. `peakHoldW` is the firmware-maintained
+// sticky peak (server fc9bde0+), which gives a stable scale across the
+// natural envelope of a transmission and resets cleanly the moment the
+// operator clears Peak Hold on the meter — no client-side decay loop
+// needed.
+private func autoScale(_ snap: Snapshot?) -> Double {
+    let peak = max(snap?.powerPeakW ?? 0, snap?.peakHoldW ?? 0, snap?.powerAvgW ?? 0)
+    let standards: [Double] = [5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
+    return standards.first(where: { $0 >= peak }) ?? 10000
+}
+
+private func channelLabel(_ s: Snapshot?) -> String {
+    guard let s else { return "—" }
+    return s.autoChannel ? "A" : "\(s.channel)"
+}
+
+// Cycle order: Auto → 1 → 2 → 3 → 4 → Auto. Server's `channel_step`
+// verb takes 0 = auto, 1..4 = explicit channel.
+private func nextChannel(_ s: Snapshot?) -> Int {
+    guard let s else { return 1 }
+    if s.autoChannel { return 1 }
+    return s.channel >= 4 ? 0 : s.channel + 1
+}
+
+private func peakModeLabel(_ m: PeakMode?) -> String {
+    switch m {
+    case .peakHold: return "Hold"
+    case .average:  return "Avg"
+    case .tune:     return "Tune"
+    case nil:       return "—"
+    }
+}
+
+// Cycle order: Peak Hold (0) → Average (1) → Tune (2) → Peak Hold.
+private func nextPeakMode(_ m: PeakMode?) -> Int {
+    switch m {
+    case .peakHold: return 1
+    case .average:  return 2
+    case .tune:     return 0
+    case nil:       return 1
+    }
+}
+
+private func alarmLabel(_ s: Snapshot?) -> String {
+    guard let s else { return "—" }
+    if !s.alarmEnabled { return "Off" }
+    if s.alarmTripped  { return "TRIP" }
+    return "On"
+}
+
+private func alarmTint(_ s: Snapshot?) -> Color? {
+    guard let s else { return nil }
+    if !s.alarmEnabled { return nil }
+    if s.alarmTripped  { return .red }
+    return .green
+}
+
+// MARK: - View
+
 // Mirrors the LP-500/700 Power/SWR LCD screen. Avg + Peak power readouts
 // with scale bars, SWR + alarm, and a single Controls card that cycles
-// Channel / Range / Peak-mode in place on each press.
-struct PowerSWRView: View {
-    @ObservedObject var vm: MeterViewModel
+// Channel / Range / Peak-mode / Alarm in place on each press.
+//
+// The view is `Equatable` over its `model`; the `vm` reference is stable
+// for the lifetime of the window so we treat it as equal regardless. This
+// lets SwiftUI's `.equatable()` short-circuit the entire subtree (cards
+// + bargraphs + ControlsCard) on every parent re-render where displayed
+// values are unchanged — extremely common after `formatPower` rounds
+// adjacent samples to the same string and the bar fraction quantizes
+// into the same 1 % step.
+struct PowerSWRView: View, Equatable {
+    let model: PowerSWRModel
+    // Held by reference; not @ObservedObject (we don't need observation
+    // here — ContentView already observes and rebuilds `model` for us).
+    // Used only to dispatch control verbs from button taps.
+    let vm: MeterViewModel
+
+    static func == (lhs: PowerSWRView, rhs: PowerSWRView) -> Bool {
+        lhs.model == rhs.model && lhs.vm === rhs.vm
+    }
 
     var body: some View {
         VStack(spacing: 8) {
             HStack(alignment: .top, spacing: 8) {
                 ReadingCard(label: "Average power",
-                            value: formatPower(vm.snapshot?.powerAvgW),
+                            value: model.avgValue,
                             tint: .accentColor,
-                            bar: powerBar(for: vm.snapshot?.powerAvgW, baseTint: .cyan))
+                            bar: model.avgBar)
                     .equatable()
                 ReadingCard(label: "Peak power",
-                            value: formatPower(vm.snapshot?.displayedPeakW),
+                            value: model.peakValue,
                             tint: .accentColor,
-                            bar: powerBar(for: vm.snapshot?.displayedPeakW, baseTint: .orange))
+                            bar: model.peakBar)
                     .equatable()
             }
 
             HStack(alignment: .top, spacing: 8) {
                 ReadingCard(label: "SWR",
-                            value: formatSWR(vm.snapshot?.swr),
-                            tint: swrTint(vm.snapshot?.swr ?? 1.0))
+                            value: model.swrValue,
+                            tint: model.swrTint)
                     .equatable()
                     .frame(maxHeight: .infinity)
-                ControlsCard(snapshot: vm.snapshot,
-                             channelDisabled: controlsDisabled,
-                             rangeDisabled: rangeDisabled,
-                             peakDisabled: controlsDisabled,
-                             alarmDisabled: alarmDisabled,
-                             rangeNote: autoChannelLocked ? perChannelLockNote : nil,
+                ControlsCard(model: model.controls,
                              onChannelStep: { vm.sendChannelStep($0) },
                              onRangeStep:   { vm.sendRangeStep() },
                              onPeakStep:    { vm.sendPeakToggle($0) },
@@ -41,8 +253,8 @@ struct PowerSWRView: View {
             }
             .fixedSize(horizontal: false, vertical: true)
 
-            if let msg = vm.snapshot?.statusMessage, !msg.isEmpty {
-                Label(msg, systemImage: "exclamationmark.bubble")
+            if !model.statusMessage.isEmpty {
+                Label(model.statusMessage, systemImage: "exclamationmark.bubble")
                     .font(.subheadline)
                     .foregroundStyle(.orange)
                     .padding(.horizontal, 12)
@@ -55,85 +267,6 @@ struct PowerSWRView: View {
             }
         }
     }
-
-    private var controlsDisabled: Bool {
-        !vm.allowControl || vm.connection != .connected || vm.setupOpen
-    }
-
-    // Range and Alarm are per-channel settings on the LP-500/700; the
-    // firmware silently ignores both presses while the meter is in
-    // auto-channel mode. Pre-emptively gate the UI so the user sees why
-    // before clicking. (Server NACKs the same verbs, but greying out
-    // is clearer than a transient toast.)
-    private var autoChannelLocked: Bool {
-        vm.snapshot?.autoChannel == true
-    }
-
-    private var rangeDisabled: Bool { controlsDisabled || autoChannelLocked }
-    private var alarmDisabled: Bool { controlsDisabled || autoChannelLocked }
-
-    private let perChannelLockNote = "Switch to CH 1–4 to use; auto-channel locks per-channel settings."
-
-    private func formatPower(_ w: Double?) -> ReadingCard.ReadingValue {
-        guard let w, !w.isNaN else { return .init(value: "—", unit: "W") }
-        if w >= 1000 { return .init(value: String(format: "%.2f", w / 1000.0), unit: "kW") }
-        if w >= 100  { return .init(value: String(format: "%.0f", w), unit: "W") }
-        return .init(value: String(format: "%.1f", w), unit: "W")
-    }
-
-    private func formatSWR(_ s: Double?) -> ReadingCard.ReadingValue {
-        guard let s, !s.isNaN else { return .init(value: "—", unit: "") }
-        return .init(value: String(format: "%.2f", s), unit: "")
-    }
-
-    private func swrTint(_ swr: Double) -> Color {
-        if swr >= 2.0 { return .red }
-        if swr >= 1.5 { return .yellow }
-        return .green
-    }
-
-    private func powerBar(for watts: Double?, baseTint: Color) -> ReadingCard.BarConfig {
-        let scale = fullScaleW(vm.snapshot?.range) ?? autoScale(vm.snapshot)
-        let w = watts ?? 0
-        // Quantize the bar fraction to 1 % steps. The eye can't resolve
-        // finer movement on a 6-pt bar, and step-quantising means the
-        // surrounding ReadingCard's Equatable check skips body
-        // re-evaluation when two adjacent samples land in the same step.
-        let raw = w / scale
-        let quantized = (raw * 100).rounded() / 100
-        return ReadingCard.BarConfig(fraction: quantized, scale: scale, baseTint: baseTint)
-    }
-
-    private func fullScaleW(_ range: String?) -> Double? {
-        guard let r = range?.lowercased(), !r.isEmpty, r != "auto" else { return nil }
-        switch r {
-        case "5w":   return 5
-        case "10w":  return 10
-        case "25w":  return 25
-        case "50w":  return 50
-        case "100w": return 100
-        case "250w": return 250
-        case "500w": return 500
-        case "1k":   return 1000
-        case "2.5k": return 2500
-        case "5k":   return 5000
-        case "10k":  return 10000
-        default:     return nil
-        }
-    }
-
-    // Fallback when range is "auto" or unknown (the typical CH Auto
-    // case): pick the smallest standard scale that comfortably contains
-    // the highest power in the current snapshot. `peakHoldW` is the
-    // firmware-maintained sticky peak (server fc9bde0+), which gives a
-    // stable scale across the natural envelope of a transmission and
-    // resets cleanly the moment the operator clears Peak Hold on the
-    // meter — no client-side decay loop needed.
-    private func autoScale(_ snap: Snapshot?) -> Double {
-        let peak = max(snap?.powerPeakW ?? 0, snap?.peakHoldW ?? 0, snap?.powerAvgW ?? 0)
-        let standards: [Double] = [5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
-        return standards.first(where: { $0 >= peak }) ?? 10000
-    }
 }
 
 // MARK: - Pieces
@@ -143,22 +276,6 @@ private struct ReadingCard: View, Equatable {
     var value: ReadingValue
     var tint: Color
     var bar: BarConfig? = nil
-
-    // Tuple-typed (String, String) isn't Equatable on its own; lift to
-    // a small struct so SwiftUI's `.equatable()` can short-circuit body
-    // re-evaluation when the displayed value hasn't changed since the
-    // last frame (extremely common after `formatPower` rounds two
-    // adjacent samples to the same display string).
-    struct ReadingValue: Equatable {
-        var value: String
-        var unit: String
-    }
-
-    struct BarConfig: Equatable {
-        var fraction: Double
-        var scale: Double
-        var baseTint: Color
-    }
 
     static func == (lhs: ReadingCard, rhs: ReadingCard) -> Bool {
         lhs.label == rhs.label
@@ -207,7 +324,7 @@ private struct ReadingCard: View, Equatable {
     }
 }
 
-private struct PowerBar: View, Equatable {
+private struct PowerBar: View {
     var fraction: Double
     var baseTint: Color
 
@@ -228,25 +345,20 @@ private struct PowerBar: View, Equatable {
             }
         }
         .frame(height: 6)
-        // No `.animation(value: fraction)` — implicit animations run a
-        // 60 Hz CoreAnimation transaction until they settle, and at the
-        // 10 Hz mutation rate we never settle. The fraction is already
-        // quantized at construction time, so changes step-jump cleanly.
     }
 }
 
-// One card with four toggle/cycle-on-press buttons in a 2×2 grid:
-// Channel, Range, Mode, Alarm. Each button shows the current value
-// as its face; tapping advances to the next value (or toggles, for
-// Alarm). Range/Alarm grey out when auto-channel locks per-channel
-// settings, with a small caption pointing the user at CH 1–4.
+// One card with four cycle-on-press buttons in a row: Channel, Range,
+// Peak-mode, Alarm. Each button shows the current value as its face;
+// tapping advances to the next value (or toggles, for Alarm).
+// Range / Alarm grey out when auto-channel locks per-channel settings,
+// with a small caption pointing the user at CH 1–4.
+//
+// Reads only Equatable values from the model; closures are constructed
+// fresh by the parent on each re-render but only invoked on user input,
+// so their non-Equatability doesn't cost render work.
 private struct ControlsCard: View {
-    var snapshot: Snapshot?
-    var channelDisabled: Bool
-    var rangeDisabled: Bool
-    var peakDisabled: Bool
-    var alarmDisabled: Bool
-    var rangeNote: String?
+    var model: ControlsModel
     var onChannelStep: (Int) -> Void
     var onRangeStep: () -> Void
     var onPeakStep: (Int) -> Void
@@ -257,33 +369,33 @@ private struct ControlsCard: View {
             PanelHeader(title: "Controls")
             HStack(spacing: 4) {
                 cycleButton(title: "CH",
-                            value: channelLabel,
-                            disabled: channelDisabled) {
-                    onChannelStep(nextChannel)
+                            value: model.channelLabel,
+                            disabled: model.channelDisabled) {
+                    onChannelStep(model.nextChannel)
                 }
                 cycleButton(title: "Rng",
-                            value: snapshot?.range ?? "—",
-                            disabled: rangeDisabled) {
+                            value: model.rangeLabel,
+                            disabled: model.rangeDisabled) {
                     onRangeStep()
                 }
                 cycleButton(title: "Mode",
-                            value: peakModeLabel,
-                            disabled: peakDisabled) {
-                    onPeakStep(nextPeakMode)
+                            value: model.peakModeLabel,
+                            disabled: model.peakDisabled) {
+                    onPeakStep(model.nextPeakMode)
                 }
                 cycleButton(title: "Alm",
-                            value: alarmLabel,
-                            disabled: alarmDisabled,
-                            valueTint: alarmTint) {
+                            value: model.alarmLabel,
+                            disabled: model.alarmDisabled,
+                            valueTint: model.alarmTint) {
                     onAlarmToggle()
                 }
             }
             // Always reserve space for the lock note so the card height
             // doesn't change when the user cycles between CH A and CH 1–4.
-            Text(rangeNote ?? " ")
+            Text(model.rangeNote ?? " ")
                 .font(.system(size: 9))
                 .foregroundStyle(.secondary)
-                .opacity(rangeNote == nil ? 0 : 1)
+                .opacity(model.rangeNote == nil ? 0 : 1)
                 .lineLimit(1)
         }
         .padding(8)
@@ -296,52 +408,6 @@ private struct ControlsCard: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(Color.secondary.opacity(0.15), lineWidth: 0.5)
         )
-    }
-
-    private var channelLabel: String {
-        guard let s = snapshot else { return "—" }
-        return s.autoChannel ? "A" : "\(s.channel)"
-    }
-
-    // Cycle order: Auto → 1 → 2 → 3 → 4 → Auto. Server's channel_step
-    // verb takes 0 = auto, 1..4 = explicit channel.
-    private var nextChannel: Int {
-        guard let s = snapshot else { return 1 }
-        if s.autoChannel { return 1 }
-        return s.channel >= 4 ? 0 : s.channel + 1
-    }
-
-    private var peakModeLabel: String {
-        switch snapshot?.peakMode {
-        case .peakHold: return "Hold"
-        case .average:  return "Avg"
-        case .tune:     return "Tune"
-        case nil:       return "—"
-        }
-    }
-
-    // Cycle order: Peak Hold (0) → Average (1) → Tune (2) → Peak Hold.
-    private var nextPeakMode: Int {
-        switch snapshot?.peakMode {
-        case .peakHold: return 1
-        case .average:  return 2
-        case .tune:     return 0
-        case nil:       return 1
-        }
-    }
-
-    private var alarmLabel: String {
-        guard let s = snapshot else { return "—" }
-        if !s.alarmEnabled { return "Off" }
-        if s.alarmTripped  { return "TRIP" }
-        return "On"
-    }
-
-    private var alarmTint: Color? {
-        guard let s = snapshot else { return nil }
-        if !s.alarmEnabled { return nil }       // use default secondary
-        if s.alarmTripped  { return .red }
-        return .green
     }
 
     private func cycleButton(title: String, value: String, disabled: Bool, valueTint: Color? = nil, action: @escaping () -> Void) -> some View {

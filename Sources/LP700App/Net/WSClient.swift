@@ -27,10 +27,13 @@ actor WSClient {
     // reference web client's reconnect cadence.
     private let heartbeatTimeoutNs: UInt64 = 4_000_000_000
     // Coalesce telemetry frames at the receive side so JSONDecoder runs
-    // at most ~10 Hz regardless of the meter's poll cadence (typically
+    // at most ~5 Hz regardless of the meter's poll cadence (typically
     // 25 Hz). Heartbeat/status/ack frames are always decoded — they're
     // either rare (status/ack) or already emitted at ~0.5 Hz (heartbeat).
-    private let telemetryMinInterval: TimeInterval = 0.1
+    // Stays aligned with `MeterViewModel.publishInterval` so the WS
+    // throttle and the @Published throttle are matched (no benefit from
+    // decoding faster than the UI can publish).
+    private let telemetryMinInterval: TimeInterval = 0.2
     private var lastTelemetryDecodedAt: Date = .distantPast
     // `"power_avg_w"` is unique to telemetry frames (the meter snapshot
     // body) and the server's alphabetical key ordering puts it near the

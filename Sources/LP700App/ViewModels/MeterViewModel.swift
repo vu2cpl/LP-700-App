@@ -38,12 +38,14 @@ final class MeterViewModel: ObservableObject {
 
     // UI publish coalescing. The server pushes telemetry at the meter's
     // poll cadence (~25 Hz on real hardware, similar on the simulator),
-    // but a human can't read more than ~5 numbers/second. Coalesce to
-    // 10 Hz so SwiftUI body re-evaluation cost (and the menu-bar label
-    // re-render that happens on every objectWillChange) is bounded.
-    // Alarm edges and status banners still process on every inbound
-    // frame so notifications stay timely.
-    private static let publishInterval: TimeInterval = 0.1  // 100 ms (10 Hz)
+    // but a human can't read more than ~5 numbers/second. We coalesce
+    // to 5 Hz: SwiftUI body re-evaluation, the toolbar's NSHostingView
+    // relayout (which dominates residual CPU because the toolbar
+    // content closure rebuilds on every ContentView.body), and the
+    // menu-bar label tick all run at most 5×/second. Alarm edges and
+    // status banners still process on every inbound frame so
+    // notifications stay timely.
+    private static let publishInterval: TimeInterval = 0.2  // 200 ms (5 Hz)
     private var pendingSnapshot: Snapshot?
     private var publishTask: Task<Void, Never>?
     private var lastPublishAt: Date = .distantPast

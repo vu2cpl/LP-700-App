@@ -27,13 +27,20 @@ struct ContentView: View {
 
     @ToolbarContentBuilder
     private var mainToolbar: some ToolbarContent {
+        // ConnectionBadge + BackendBadge are Equatable over their value
+        // inputs; `.equatable()` lets SwiftUI's diff skip their body
+        // (and the AppKit NSToolbarItemViewer relayout that follows)
+        // when state hasn't changed. Profile showed the toolbar item's
+        // `_layoutSubtreeWithOldSize:` was a major hot spot at 10 Hz.
         ToolbarItem(placement: .navigation) {
             ConnectionBadge(state: vm.connection, host: hostHint)
+                .equatable()
                 .help(hostHint)
         }
 
         ToolbarItem(placement: .principal) {
             BackendBadge(backend: vm.backend)
+                .equatable()
         }
 
         ToolbarItem(placement: .primaryAction) {
@@ -118,7 +125,24 @@ struct ContentView: View {
         if vm.setupOpen {
             SetupOverlay(vm: vm)
         } else {
-            PowerSWRView(vm: vm)
+            // Build a value-typed model on each ContentView re-render
+            // (cheap; pure functions over the snapshot). PowerSWRView
+            // is `Equatable` over this model, so SwiftUI's `.equatable()`
+            // skips the entire bargraph + ControlsCard subtree's body
+            // re-evaluation and layout pass when display values are
+            // unchanged frame-over-frame — extremely common at the
+            // 10 Hz publish rate after `formatPower` rounds and the
+            // bar fraction is quantized into 1 % steps.
+            PowerSWRView(
+                model: PowerSWRModel.make(
+                    snapshot: vm.snapshot,
+                    allowControl: vm.allowControl,
+                    connected: vm.connection == .connected,
+                    setupOpen: vm.setupOpen
+                ),
+                vm: vm
+            )
+            .equatable()
         }
     }
 
@@ -185,7 +209,7 @@ private struct CompactPanel<Content: View>: View {
 
 // MARK: - Toolbar pieces
 
-private struct ConnectionBadge: View {
+private struct ConnectionBadge: View, Equatable {
     var state: WSClient.ConnectionState
     var host: String
 
@@ -222,7 +246,7 @@ private struct ConnectionBadge: View {
     }
 }
 
-private struct BackendBadge: View {
+private struct BackendBadge: View, Equatable {
     var backend: String
 
     var body: some View {

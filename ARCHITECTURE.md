@@ -1,6 +1,6 @@
 # Architecture review — LP-700-App
 
-**Date:** 2026-05-09 · **Status:** v0.1.2 (Power/SWR meter mirror with bargraphs; profile-driven perf pass)
+**Date:** 2026-05-09 · **Status:** v0.1.3 (Power/SWR meter mirror with bargraphs; second perf pass — value-typed view subtree + 5 Hz coalescing)
 
 ## Changes since v0.1
 
@@ -14,9 +14,14 @@
   selects `peak_hold_w` (firmware-maintained held peak, bytes 0–1)
   in Peak Hold mode and `power_peak_w` (live envelope, bytes 23–24)
   otherwise — mirrors the meter's LCD and the embedded web client.
-- **Profile-driven CPU pass.** Idle CPU during 25 Hz simulator
-  telemetry dropped 30 % → 17 % after four targeted fixes
-  (see [§ 2 Telemetry coalescing](#2-telemetry-coalescing-and-render-budgets)).
+- **Profile-driven CPU pass (v0.1.2 + v0.1.3).** Idle CPU during
+  25 Hz simulator telemetry dropped from 30 % to **~11 %** across
+  two rounds: v0.1.2 cut the dead 16 fps decay loop, added 10 Hz
+  publish + WS-side decode throttle, and made the readout cards
+  Equatable; v0.1.3 factored `PowerSWRView`'s subtree onto a
+  value-typed `PowerSWRModel`, made the toolbar items Equatable,
+  and bumped the publish/decode rate to 5 Hz. Detail in
+  [§ 2.1 Telemetry coalescing](#21-telemetry-coalescing-and-render-budgets).
 - **Layout-aware screenshot tooling.** `--open-setup` /
   `--open-prefs` launch flags pop the SETUP overlay or Settings
   window for documentation regeneration without needing
@@ -106,38 +111,55 @@ Boundary rules:
 
 The wire pushes telemetry at the meter's poll cadence (~25 Hz on real
 hardware, similar on the simulator). A human can't read more than ~5
-numbers/second, so we cap UI-driving work in two places:
+numbers/second, so we cap UI-driving work at three layers:
 
 1. **WSClient drops telemetry frames inside the throttle window.**
    Each `URLSessionWebSocketTask.Message` is examined as a string
    first; if its body contains the `"power_avg_w"` marker (unique to
    telemetry frames; the server's alphabetical key ordering puts it
-   near the start of the bytes) AND `Date().timeIntervalSince(lastTelemetryDecodedAt) < 0.1`,
+   near the start of the bytes) AND `Date().timeIntervalSince(lastTelemetryDecodedAt) < 0.2`,
    the actor returns without invoking `JSONDecoder`. Heartbeat,
    status, and ack frames don't match the marker and always decode.
    Result: ~5× fewer JSON decodes during a sustained TX.
 
-2. **MeterViewModel coalesces `@Published var snapshot` to ≤10 Hz.**
+2. **MeterViewModel coalesces `@Published var snapshot` to ≤5 Hz.**
    Inbound telemetry events update a private `pendingSnapshot`; a
    single trailing `publishTask` commits the latest pending value to
-   `snapshot` after the 100 ms window. `handleAlarmEdge` runs on
+   `snapshot` after the 200 ms window. `handleAlarmEdge` runs on
    every inbound frame so notifications stay timely; only the
    SwiftUI mutation path is throttled. `stop()` cancels the publish
    task and clears `pendingSnapshot` on disconnect.
 
-`PowerSWRView`'s `ReadingCard` and `PowerBar` are `Equatable` and
-applied with `.equatable()` so SwiftUI skips body re-evaluation
-(and the consequent `LayoutEngineBox.sizeThatFits` walk) when the
-displayed value, tint, and quantized bar fraction are unchanged
-since the previous frame — extremely common after `formatPower`
-rounds two adjacent samples to the same string. The bar fraction
-itself is quantized to 1 % steps in `powerBar()`.
+3. **Value-typed view subtree + layered Equatable.** `ContentView`
+   builds a `PowerSWRModel` (Equatable struct: pre-formatted strings,
+   pre-quantized bar fractions, pre-resolved control labels and
+   disabled flags) on each body evaluation, and passes it into
+   `PowerSWRView` along with the VM reference (used only for
+   command dispatch — not observed). `PowerSWRView` is `Equatable`
+   over `model`; inside it, the leaf `ReadingCard`s are also
+   `Equatable` and `.equatable()`-wrapped so an unchanged Avg card
+   skips body + layout even when Peak or SWR card moved. Toolbar
+   items (`ConnectionBadge`, `BackendBadge`) are likewise Equatable
+   so the SwiftUI ↔ AppKit `NSToolbarItemViewer` bridge skips its
+   `_layoutSubtreeWithOldSize:` work when the connection state and
+   backend pill haven't changed.
 
-The 16 fps client-side decay loop that the v0.1 LP-100A-App pattern
-inherited is **gone** — the autoScale picker now relies on the
-firmware-maintained `peak_hold_w` from the snapshot directly, which
-gives stable scale across a transmission envelope and resets cleanly
-when the operator clears Peak Hold on the meter.
+The bar fraction is quantized to 1 % steps in `powerBar()` so
+adjacent samples that round to the same display step also collide
+in the Equatable check. The 16 fps client-side decay loop that the
+v0.1 LP-100A-App pattern inherited is **gone** — `autoScale` relies
+on the firmware-maintained `peak_hold_w` from the snapshot directly,
+which gives stable scale across a transmission envelope and resets
+cleanly when the operator clears Peak Hold on the meter.
+
+Empirical effect on `top` CPU during a sustained simulator TX
+sweep:
+
+| state                                  | CPU    |
+|----------------------------------------|-------:|
+| v0.1.0 (pre-perf pass)                 | ~30 %  |
+| v0.1.2 (decay-loop kill + 10 Hz throttle + leaf Equatable) | ~17 %  |
+| v0.1.3 (value-typed subtree + 5 Hz throttle + Equatable toolbar) | ~11 %  |
 
 ## 3. Connection lifecycle
 
@@ -351,25 +373,21 @@ CI:
 
 **Open follow-ups:**
 
-1. **Residual ~17 % CPU during sustained TX.** The four perf fixes
-   in v0.1.2 took idle CPU from ~30 % to ~17 % — `sample` shows the
-   remaining cost is in SwiftUI layout (`LayoutEngineBox.sizeThatFits`
-   + `NSPerformVisuallyAtomicChange`) walking the compact card tree
-   once per parent invalidation. Driving below ~10 % would require
-   factoring `PowerSWRView`'s subtree onto a value-typed `Snapshot`
-   input (so the entire subtree becomes `Equatable`, not just its
-   leaves). Bigger refactor risk than the current win justifies;
-   land if the residual cost becomes a problem in practice.
-2. **Banner UX.** `statusBanner` is global; doesn't pin to the
+1. **Banner UX.** `statusBanner` is global; doesn't pin to the
    offending button. Cheap polish: tint the button red briefly.
-3. **No always-on-top window option.** The web client doesn't have one
+2. **No always-on-top window option.** The web client doesn't have one
    either, but it's a common Mac affordance.
-4. **No notarization.** Releases are ad-hoc-signed; Gatekeeper
+3. **No notarization.** Releases are ad-hoc-signed; Gatekeeper
    bypass documented in README. Sign + notarize when Developer ID
    is available.
-5. **Mode-cycle drift.** `mode_step` cycles the meter's LCD page; the
+4. **Mode-cycle drift.** `mode_step` cycles the meter's LCD page; the
    server publishes `top_mode` in subsequent telemetry frames so we
    read back the truth. No client-side optimism needed.
+5. **5 Hz numeric tick during fast TX.** The publish throttle caps
+   the readout update rate at 5 Hz. For station-monitor use this is
+   imperceptible; if a future use-case wants 10 Hz back, raise
+   `MeterViewModel.publishInterval` and `WSClient.telemetryMinInterval`
+   in lockstep — expect ~2× the residual CPU.
 
 **Closed since v0.1:**
 
@@ -380,6 +398,10 @@ CI:
   app v0.1.1).
 - ~~Decay loop fires 16 fps for fields no view reads.~~ Removed in
   v0.1.2 perf pass.
+- ~~Residual ~17 % CPU during sustained TX.~~ Driven down to ~11 %
+  in v0.1.3 by factoring `PowerSWRView` onto a value-typed
+  `PowerSWRModel`, marking toolbar items Equatable, and matching
+  WS-decode + @Published throttle at 5 Hz.
 
 **Not at risk:**
 
