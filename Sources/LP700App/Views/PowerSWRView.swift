@@ -1,14 +1,14 @@
 import SwiftUI
 
-// Mirrors the LP-500/700 Power/SWR LCD screen. Avg + Peak power readouts,
-// SWR with sticky-peak indicator, channel pills (Auto / 1..4), range
-// cycle button, peak-mode segmented selector, and alarm pill.
+// Mirrors the LP-500/700 Power/SWR LCD screen. Avg + Peak power readouts
+// with scale bars, SWR + alarm, and a single Controls card that cycles
+// Channel / Range / Peak-mode in place on each press.
 struct PowerSWRView: View {
     @ObservedObject var vm: MeterViewModel
 
     var body: some View {
-        VStack(spacing: 14) {
-            HStack(alignment: .top, spacing: 14) {
+        VStack(spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
                 ReadingCard(label: "Average power",
                             value: formatPower(vm.snapshot?.powerAvgW),
                             tint: .accentColor,
@@ -19,30 +19,20 @@ struct PowerSWRView: View {
                             bar: powerBar(for: vm.snapshot?.displayedPeakW, baseTint: .orange))
             }
 
-            HStack(alignment: .top, spacing: 14) {
+            HStack(alignment: .top, spacing: 8) {
                 ReadingCard(label: "SWR",
                             value: formatSWR(vm.snapshot?.swr),
                             tint: swrTint(vm.snapshot?.swr ?? 1.0))
-                AlarmCard(snapshot: vm.snapshot,
-                          disabled: alarmDisabled,
-                          note: autoChannelLocked ? perChannelLockNote : nil) {
-                    vm.sendAlarmToggle()
-                }
-            }
-
-            ChannelRow(snapshot: vm.snapshot, disabled: controlsDisabled) { idx in
-                vm.sendChannelStep(idx)
-            }
-
-            HStack(spacing: 14) {
-                RangeCard(range: vm.snapshot?.range,
-                          disabled: rangeDisabled,
-                          note: autoChannelLocked ? perChannelLockNote : nil) {
-                    vm.sendRangeStep()
-                }
-                PeakModeCard(snapshot: vm.snapshot, disabled: controlsDisabled) { value in
-                    vm.sendPeakToggle(value)
-                }
+                ControlsCard(snapshot: vm.snapshot,
+                             channelDisabled: controlsDisabled,
+                             rangeDisabled: rangeDisabled,
+                             peakDisabled: controlsDisabled,
+                             alarmDisabled: alarmDisabled,
+                             rangeNote: autoChannelLocked ? perChannelLockNote : nil,
+                             onChannelStep: { vm.sendChannelStep($0) },
+                             onRangeStep:   { vm.sendRangeStep() },
+                             onPeakStep:    { vm.sendPeakToggle($0) },
+                             onAlarmToggle: { vm.sendAlarmToggle() })
             }
 
             if let msg = vm.snapshot?.statusMessage, !msg.isEmpty {
@@ -148,11 +138,11 @@ private struct ReadingCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 4) {
             PanelHeader(title: label)
-            HStack(alignment: .lastTextBaseline, spacing: 6) {
+            HStack(alignment: .lastTextBaseline, spacing: 4) {
                 Text(value.value)
-                    .font(.system(size: 44, weight: .semibold, design: .rounded))
+                    .font(.system(size: 40, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .foregroundColor(tint)
                 if !value.unit.isEmpty {
@@ -164,19 +154,19 @@ private struct ReadingCard: View {
             if let bar {
                 PowerBar(fraction: bar.fraction, baseTint: bar.baseTint)
                 Text("0 / \(formatScale(bar.scale))")
-                    .font(.system(size: 10))
+                    .font(.system(size: 9))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
+        .padding(10)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(.regularMaterial)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(Color.secondary.opacity(0.15), lineWidth: 0.5)
         )
     }
@@ -207,208 +197,142 @@ private struct PowerBar: View {
                     .frame(width: max(2, geo.size.width * f))
             }
         }
-        .frame(height: 8)
+        .frame(height: 6)
         .animation(.easeOut(duration: 0.15), value: fraction)
     }
 }
 
-private struct AlarmCard: View {
+// One card with four toggle/cycle-on-press buttons in a 2×2 grid:
+// Channel, Range, Mode, Alarm. Each button shows the current value
+// as its face; tapping advances to the next value (or toggles, for
+// Alarm). Range/Alarm grey out when auto-channel locks per-channel
+// settings, with a small caption pointing the user at CH 1–4.
+private struct ControlsCard: View {
     var snapshot: Snapshot?
-    var disabled: Bool
-    var note: String?
-    var onToggle: () -> Void
+    var channelDisabled: Bool
+    var rangeDisabled: Bool
+    var peakDisabled: Bool
+    var alarmDisabled: Bool
+    var rangeNote: String?
+    var onChannelStep: (Int) -> Void
+    var onRangeStep: () -> Void
+    var onPeakStep: (Int) -> Void
+    var onAlarmToggle: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            PanelHeader(title: "Alarm")
-            Button(action: onToggle) {
-                HStack {
-                    Image(systemName: icon)
-                        .font(.system(size: 13))
-                    Text(label)
-                        .font(.system(size: 13, weight: .semibold))
+        VStack(alignment: .leading, spacing: 4) {
+            PanelHeader(title: "Controls")
+            HStack(spacing: 4) {
+                cycleButton(title: "CH",
+                            value: channelLabel,
+                            disabled: channelDisabled) {
+                    onChannelStep(nextChannel)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .frame(maxWidth: .infinity)
-                .foregroundColor(tint)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(tint.opacity(0.6), lineWidth: 1)
-                )
+                cycleButton(title: "Rng",
+                            value: snapshot?.range ?? "—",
+                            disabled: rangeDisabled) {
+                    onRangeStep()
+                }
+                cycleButton(title: "Mode",
+                            value: peakModeLabel,
+                            disabled: peakDisabled) {
+                    onPeakStep(nextPeakMode)
+                }
+                cycleButton(title: "Alm",
+                            value: alarmLabel,
+                            disabled: alarmDisabled,
+                            valueTint: alarmTint) {
+                    onAlarmToggle()
+                }
             }
-            .buttonStyle(.plain)
-            .disabled(disabled)
-            Text(note ?? "Numeric thresholds are set on the meter LCD and not retrievable via USB.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
+            if let rangeNote {
+                Text(rangeNote)
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+            }
         }
+        .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(.regularMaterial)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(Color.secondary.opacity(0.15), lineWidth: 0.5)
         )
     }
 
-    private var icon: String {
-        guard let s = snapshot else { return "minus.circle" }
-        if !s.alarmEnabled { return "bell.slash" }
-        if s.alarmTripped { return "bell.and.waves.left.and.right.fill" }
-        return "bell.fill"
-    }
-
-    private var label: String {
+    private var channelLabel: String {
         guard let s = snapshot else { return "—" }
-        if !s.alarmEnabled { return "Disabled" }
-        if s.alarmTripped { return "TRIPPED" }
-        return "Armed"
+        return s.autoChannel ? "A" : "\(s.channel)"
     }
 
-    private var tint: Color {
-        guard let s = snapshot else { return .secondary }
-        if !s.alarmEnabled { return .secondary }
-        if s.alarmTripped { return .red }
+    // Cycle order: Auto → 1 → 2 → 3 → 4 → Auto. Server's channel_step
+    // verb takes 0 = auto, 1..4 = explicit channel.
+    private var nextChannel: Int {
+        guard let s = snapshot else { return 1 }
+        if s.autoChannel { return 1 }
+        return s.channel >= 4 ? 0 : s.channel + 1
+    }
+
+    private var peakModeLabel: String {
+        switch snapshot?.peakMode {
+        case .peakHold: return "Hold"
+        case .average:  return "Avg"
+        case .tune:     return "Tune"
+        case nil:       return "—"
+        }
+    }
+
+    // Cycle order: Peak Hold (0) → Average (1) → Tune (2) → Peak Hold.
+    private var nextPeakMode: Int {
+        switch snapshot?.peakMode {
+        case .peakHold: return 1
+        case .average:  return 2
+        case .tune:     return 0
+        case nil:       return 1
+        }
+    }
+
+    private var alarmLabel: String {
+        guard let s = snapshot else { return "—" }
+        if !s.alarmEnabled { return "Off" }
+        if s.alarmTripped  { return "TRIP" }
+        return "On"
+    }
+
+    private var alarmTint: Color? {
+        guard let s = snapshot else { return nil }
+        if !s.alarmEnabled { return nil }       // use default secondary
+        if s.alarmTripped  { return .red }
         return .green
     }
-}
 
-private struct ChannelRow: View {
-    var snapshot: Snapshot?
-    var disabled: Bool
-    var onSelect: (Int) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            PanelHeader(title: "Channel")
-            HStack(spacing: 8) {
-                pill(label: "CH Auto", index: 0, active: snapshot?.autoChannel == true)
-                ForEach(1...4, id: \.self) { i in
-                    pill(label: "CH \(i)",
-                         index: i,
-                         active: (snapshot?.autoChannel == false) && (snapshot?.channel == i))
-                }
-                Spacer()
-            }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(.regularMaterial)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color.secondary.opacity(0.15), lineWidth: 0.5)
-        )
-    }
-
-    private func pill(label: String, index: Int, active: Bool) -> some View {
-        Button(action: { onSelect(index) }) {
-            Text(label)
-                .font(.system(size: 13, weight: active ? .bold : .medium))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .foregroundColor(active ? .accentColor : .primary)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(active ? Color.accentColor : Color.secondary.opacity(0.3),
-                                     lineWidth: 1)
-                )
-        }
-        .buttonStyle(.plain)
-        .disabled(disabled)
-    }
-}
-
-private struct RangeCard: View {
-    var range: String?
-    var disabled: Bool
-    var note: String?
-    var onStep: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            PanelHeader(title: "Range")
-            Button(action: onStep) {
-                HStack {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                    Text("Range: \(range ?? "—")")
-                        .font(.system(size: 13, weight: .medium))
-                    Spacer()
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
-            .disabled(disabled)
-            if let note {
-                Text(note)
-                    .font(.caption2)
+    private func cycleButton(title: String, value: String, disabled: Bool, valueTint: Color? = nil, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(title)
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                Text(value)
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundColor(disabled ? .secondary : (valueTint ?? .accentColor))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(.regularMaterial)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color.secondary.opacity(0.15), lineWidth: 0.5)
-        )
-    }
-}
-
-private struct PeakModeCard: View {
-    var snapshot: Snapshot?
-    var disabled: Bool
-    var onSelect: (Int) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            PanelHeader(title: "Peak / Avg / Tune")
-            HStack(spacing: 8) {
-                modeButton(label: "Peak Hold", value: 0, mode: .peakHold)
-                modeButton(label: "Average",   value: 1, mode: .average)
-                modeButton(label: "Tune",      value: 2, mode: .tune)
-            }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(.regularMaterial)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color.secondary.opacity(0.15), lineWidth: 0.5)
-        )
-    }
-
-    private func modeButton(label: String, value: Int, mode: PeakMode) -> some View {
-        let active = snapshot?.peakMode == mode
-        return Button(action: { onSelect(value) }) {
-            Text(label)
-                .font(.system(size: 13, weight: active ? .bold : .medium))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .frame(maxWidth: .infinity)
-                .foregroundColor(active ? .accentColor : .primary)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(active ? Color.accentColor : Color.secondary.opacity(0.3),
-                                     lineWidth: 1)
-                )
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(Color.secondary.opacity(0.08))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 5)
+                    .strokeBorder(Color.secondary.opacity(0.25), lineWidth: 0.5)
+            )
         }
         .buttonStyle(.plain)
         .disabled(disabled)

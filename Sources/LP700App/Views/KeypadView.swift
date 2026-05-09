@@ -74,23 +74,23 @@ struct KeypadView: View {
 
     private func keyButton(title: String, systemImage: String, subtitle: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 8) {
+            HStack(spacing: 5) {
                 Image(systemName: systemImage)
-                    .font(.system(size: 14))
-                    .frame(width: 18)
-                VStack(alignment: .leading, spacing: 1) {
+                    .font(.system(size: 11))
+                    .frame(width: 14)
+                VStack(alignment: .leading, spacing: 0) {
                     Text(title)
-                        .font(.system(.callout, design: .default).weight(.medium))
+                        .font(.system(size: 11, weight: .medium))
                     Text(subtitle)
-                        .font(.caption2)
+                        .font(.system(size: 9))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
             }
-            .padding(.vertical, 4)
-            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .padding(.horizontal, 4)
         }
         .buttonStyle(.bordered)
-        .controlSize(.large)
+        .controlSize(.small)
     }
 }
