@@ -1,9 +1,29 @@
 # Architecture review — LP-700-App
 
-**Date:** 2026-05-08 · **Status:** v0.1 (initial scaffold mirroring LP-100A-App)
+**Date:** 2026-05-09 · **Status:** v0.1.2 (Power/SWR meter mirror with bargraphs; profile-driven perf pass)
 
-This document is a focused review of the v0.1 implementation of the
-LP-700-App macOS client. It covers structure, threading, network
+## Changes since v0.1
+
+- **Power/SWR mirror is fully laid out.** `PowerSWRView` ships the
+  Avg + Peak readouts with auto-scaled bargraphs (cyan/orange,
+  yellow ≥ 80 %, red ≥ 95 %), SWR with severity tint, and a single
+  `ControlsCard` that cycles Channel / Range / Peak-mode / Alarm in
+  place. The "v0.2 bargraphs" follow-up from the v0.1 risk list
+  landed.
+- **Peak Power respects `peak_mode`.** `Snapshot.displayedPeakW`
+  selects `peak_hold_w` (firmware-maintained held peak, bytes 0–1)
+  in Peak Hold mode and `power_peak_w` (live envelope, bytes 23–24)
+  otherwise — mirrors the meter's LCD and the embedded web client.
+- **Profile-driven CPU pass.** Idle CPU during 25 Hz simulator
+  telemetry dropped 30 % → 17 % after four targeted fixes
+  (see [§ 2 Telemetry coalescing](#2-telemetry-coalescing-and-render-budgets)).
+- **Layout-aware screenshot tooling.** `--open-setup` /
+  `--open-prefs` launch flags pop the SETUP overlay or Settings
+  window for documentation regeneration without needing
+  Accessibility permission for `osascript` keystroke.
+
+This document is a focused review of the v0.1.2 implementation of
+the LP-700-App macOS client. It covers structure, threading, network
 behavior, error paths, and known risks. Read alongside
 [README.md](README.md) (install + usage) and
 [CLAUDE.md](CLAUDE.md) (orientation for contributors).
@@ -81,9 +101,43 @@ Boundary rules:
 - Commands flow the other way: `MeterViewModel.send*()` (main actor)
   schedules a `Task { try? await ws?.send(frame) }`. `send` on
   `URLSessionWebSocketTask` is itself thread-safe; the actor wraps it.
-- The decay loop in `MeterViewModel.startDecayLoop()` runs in a detached
-  Task, sleeping 60 ms between ticks and hopping to the main actor for
-  state mutation.
+
+### 2.1 Telemetry coalescing and render budgets
+
+The wire pushes telemetry at the meter's poll cadence (~25 Hz on real
+hardware, similar on the simulator). A human can't read more than ~5
+numbers/second, so we cap UI-driving work in two places:
+
+1. **WSClient drops telemetry frames inside the throttle window.**
+   Each `URLSessionWebSocketTask.Message` is examined as a string
+   first; if its body contains the `"power_avg_w"` marker (unique to
+   telemetry frames; the server's alphabetical key ordering puts it
+   near the start of the bytes) AND `Date().timeIntervalSince(lastTelemetryDecodedAt) < 0.1`,
+   the actor returns without invoking `JSONDecoder`. Heartbeat,
+   status, and ack frames don't match the marker and always decode.
+   Result: ~5× fewer JSON decodes during a sustained TX.
+
+2. **MeterViewModel coalesces `@Published var snapshot` to ≤10 Hz.**
+   Inbound telemetry events update a private `pendingSnapshot`; a
+   single trailing `publishTask` commits the latest pending value to
+   `snapshot` after the 100 ms window. `handleAlarmEdge` runs on
+   every inbound frame so notifications stay timely; only the
+   SwiftUI mutation path is throttled. `stop()` cancels the publish
+   task and clears `pendingSnapshot` on disconnect.
+
+`PowerSWRView`'s `ReadingCard` and `PowerBar` are `Equatable` and
+applied with `.equatable()` so SwiftUI skips body re-evaluation
+(and the consequent `LayoutEngineBox.sizeThatFits` walk) when the
+displayed value, tint, and quantized bar fraction are unchanged
+since the previous frame — extremely common after `formatPower`
+rounds two adjacent samples to the same string. The bar fraction
+itself is quantized to 1 % steps in `powerBar()`.
+
+The 16 fps client-side decay loop that the v0.1 LP-100A-App pattern
+inherited is **gone** — the autoScale picker now relies on the
+firmware-maintained `peak_hold_w` from the snapshot directly, which
+gives stable scale across a transmission envelope and resets cleanly
+when the operator clears Peak Hold on the meter.
 
 ## 3. Connection lifecycle
 
@@ -131,14 +185,20 @@ Specifics worth calling out:
   pill / shield / wrench) + body (banner + active panel + status row +
   keypad). The body switches between `PowerSWRView` and `SetupOverlay`
   based on `vm.setupOpen`.
-- `PowerSWRView` is the meter mirror — Avg + Peak power readouts, SWR
-  with severity tint, channel pills (Auto / 1..4), range cycle button,
-  peak-mode trio, alarm pill, and the optional `status_message`
-  banner. It's the one place the LP-700's wire shape diverges from
-  the LP-100A's.
-- `KeypadView` is the bottom-row controls: Range step, Alarm toggle,
-  LCD Mode step, Resync. Disabled when `!allowControl ||
-  connection != .connected || setupOpen`.
+- `PowerSWRView` is the meter mirror: Avg + Peak power readouts in
+  `ReadingCard`s with auto-scaling bargraphs, SWR card with severity
+  tint, alarm card, and a single `ControlsCard` that cycles
+  Channel / Range / Peak-mode / Alarm in place on each press. The
+  optional `status_message` banner appears below the cards when the
+  meter has an active alert. `ReadingCard` and `PowerBar` are
+  `Equatable` so the layout engine can short-circuit body
+  re-evaluation (see [§ 2.1](#21-telemetry-coalescing-and-render-budgets)).
+- `KeypadView` is the inline keypad row inside the bottom
+  `CompactPanel`: Range step, Alarm toggle, LCD Mode step, Resync.
+  Disabled when `!allowControl || connection != .connected || setupOpen`.
+  Range and Alarm additionally grey out when `auto_channel == true`
+  (the LP-500/700 firmware ignores those soft-button verbs in
+  CH-Auto mode; the server NACKs them).
 - `SetupOverlay` is rendered into the same panel area when
   `vm.setupOpen` is true, replacing `PowerSWRView`. Same compositional
   choice as the embedded web client (which switches to a `<dialog>`).
@@ -162,9 +222,9 @@ direct mirror of `internal/lpmeter/snapshot.go`:
 |---------------------|-------------------|----------------------------------------------------|
 | `channel`           | `channel`         | 1..4                                               |
 | `auto_channel`      | `autoChannel`     | true ↔ "CH Auto" pill active                       |
-| `power_avg_w`       | `powerAvgW`       |                                                    |
-| `power_peak_w`      | `powerPeakW`      |                                                    |
-| `peak_hold_w`       | `peakHoldW`       | filled by simulator only at v0.1 — see snapshot.go |
+| `power_avg_w`       | `powerAvgW`       | live forward power                                  |
+| `power_peak_w`      | `powerPeakW`      | live envelope peak (bytes 23-24); decays on key-up |
+| `peak_hold_w`       | `peakHoldW`       | firmware-maintained held peak (bytes 0-1; HID + simulator since server fc9bde0). `Snapshot.displayedPeakW` selects this in Peak Hold mode |
 | `swr`               | `swr`             | severity tint at 1.5 / 2.0                         |
 | `range`             | `range`           | "5W" … "10K" \| "auto"                             |
 | `peak_mode`         | `peakMode`        | enum: peakHold / average / tune                    |
@@ -228,6 +288,8 @@ either), `backend` (re-fetched on connect).
 | `command` sent while `allow_control: false`      | View-model gates client-side; server would NACK if we tried, but we don't issue | Low |
 | Server restart (log-level resets)                | Picker shows the last value we saw; refreshes when SETUP overlay re-opens  | Med — picker is briefly stale |
 | Two `range_step` clicks in fast succession       | Both sent. Server processes serially (single source goroutine). Client UI updates from telemetry, not optimistic | Low — robust by design |
+| Telemetry frame arrives <100 ms after last decoded telemetry | WSClient drops the message before JSON decode; no event emitted. Alarm-edge detection is delayed up to 100 ms (acceptable — the meter holds an alarm for at least seconds) | Low |
+| `peak_hold_w` not yet decoded by older server (= 0 in wire) | `displayedPeakW` falls back to `power_peak_w`, so Peak Power tracks live envelope in all modes — same UX as before the server's fc9bde0 fix | Low |
 
 ## 8. Tests
 
@@ -241,15 +303,20 @@ either), `backend` (re-fetched on connect).
 - `RangeNames.cycle` matches the server's
   `internal/web/static/index.html` constant — the canary that catches
   protocol drift
+- `Snapshot.displayedPeakW` selects `peak_hold_w` in Peak Hold mode,
+  `power_peak_w` in Average / Tune, and falls back when `peak_hold_w`
+  is zero
 
-Not yet covered (acceptable gap for v0.1):
+Not yet covered (acceptable gap):
 
 - `WSClient` reconnect/backoff behavior. Hard to test deterministically
   without a fake `URLSessionWebSocketTask`.
-- `MeterViewModel` peak decay loop. Time-dependent; could be tested
-  with a clock abstraction in v0.2.
+- `WSClient` telemetry-window decode skip. Time-dependent; would need
+  a clock abstraction. Smoke-tested instead via the
+  before/after JSONDecoder sample counts during the perf pass
+  (156 → 31 over 5 s).
 - UI snapshot tests. Out of scope; visual review against the embedded
-  web client.
+  web client and the manual's `docs/screenshots/`.
 
 ## 9. Build & ship
 
@@ -282,22 +349,37 @@ CI:
 
 ## 10. Risks & follow-ups
 
-**Known issues (v0.1 → v0.2):**
+**Open follow-ups:**
 
-1. **No bargraphs yet.** The numeric readouts work but the LP-100A-App
-   bargraph + sticky-peak-marker visuals would help during fast TX.
-   Plan: port `BargraphView.swift` and adapt `RangeScale` to the
-   LP-700's wider range cycle (5W–10kW vs LP-100A's three buckets).
+1. **Residual ~17 % CPU during sustained TX.** The four perf fixes
+   in v0.1.2 took idle CPU from ~30 % to ~17 % — `sample` shows the
+   remaining cost is in SwiftUI layout (`LayoutEngineBox.sizeThatFits`
+   + `NSPerformVisuallyAtomicChange`) walking the compact card tree
+   once per parent invalidation. Driving below ~10 % would require
+   factoring `PowerSWRView`'s subtree onto a value-typed `Snapshot`
+   input (so the entire subtree becomes `Equatable`, not just its
+   leaves). Bigger refactor risk than the current win justifies;
+   land if the residual cost becomes a problem in practice.
 2. **Banner UX.** `statusBanner` is global; doesn't pin to the
    offending button. Cheap polish: tint the button red briefly.
 3. **No always-on-top window option.** The web client doesn't have one
    either, but it's a common Mac affordance.
-4. **No notarization.** First release is ad-hoc-signed; Gatekeeper
-   bypass documented in README. Sign + notarize when Developer ID is
-   available.
+4. **No notarization.** Releases are ad-hoc-signed; Gatekeeper
+   bypass documented in README. Sign + notarize when Developer ID
+   is available.
 5. **Mode-cycle drift.** `mode_step` cycles the meter's LCD page; the
    server publishes `top_mode` in subsequent telemetry frames so we
    read back the truth. No client-side optimism needed.
+
+**Closed since v0.1:**
+
+- ~~No bargraphs.~~ Avg + Peak power cards now ship auto-scaled bars
+  with severity tinting (yellow ≥ 80 %, red ≥ 95 %).
+- ~~Peak Hold doesn't actually hold.~~ `Snapshot.displayedPeakW`
+  picks `peak_hold_w` in Peak Hold mode (server fc9bde0 +
+  app v0.1.1).
+- ~~Decay loop fires 16 fps for fields no view reads.~~ Removed in
+  v0.1.2 perf pass.
 
 **Not at risk:**
 
