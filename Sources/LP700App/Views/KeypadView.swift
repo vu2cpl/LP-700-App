@@ -8,19 +8,22 @@ struct KeypadView: View {
 
     var body: some View {
         let disabled = !vm.allowControl || vm.connection != .connected || vm.setupOpen
+        let autoCh = vm.snapshot?.autoChannel == true
 
         HStack(spacing: 10) {
             keyButton(title: "Range",
                       systemImage: "arrow.triangle.2.circlepath",
-                      subtitle: vm.snapshot?.range ?? "—",
+                      subtitle: autoCh ? "Locked (auto-CH)" : (vm.snapshot?.range ?? "—"),
                       action: { vm.sendRangeStep() })
                 .keyboardShortcut("r", modifiers: [.command])
+                .disabled(autoCh)
 
             keyButton(title: "Alarm",
                       systemImage: alarmIcon,
-                      subtitle: alarmSubtitle,
+                      subtitle: autoCh ? "Locked (auto-CH)" : alarmSubtitle,
                       action: { vm.sendAlarmToggle() })
                 .keyboardShortcut("a", modifiers: [.command])
+                .disabled(autoCh)
 
             keyButton(title: "LCD Mode",
                       systemImage: "rectangle.3.offgrid",
@@ -71,23 +74,23 @@ struct KeypadView: View {
 
     private func keyButton(title: String, systemImage: String, subtitle: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 8) {
+            HStack(spacing: 5) {
                 Image(systemName: systemImage)
-                    .font(.system(size: 14))
-                    .frame(width: 18)
-                VStack(alignment: .leading, spacing: 1) {
+                    .font(.system(size: 11))
+                    .frame(width: 14)
+                VStack(alignment: .leading, spacing: 0) {
                     Text(title)
-                        .font(.system(.callout, design: .default).weight(.medium))
+                        .font(.system(size: 11, weight: .medium))
                     Text(subtitle)
-                        .font(.caption2)
+                        .font(.system(size: 9))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
             }
-            .padding(.vertical, 4)
-            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .padding(.horizontal, 4)
         }
         .buttonStyle(.bordered)
-        .controlSize(.large)
+        .controlSize(.small)
     }
 }

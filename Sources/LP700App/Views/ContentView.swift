@@ -19,7 +19,7 @@ struct ContentView: View {
         .sheet(isPresented: $vm.connectionSheetOpen) {
             ConnectionSheet(vm: vm) { vm.connectionSheetOpen = false }
         }
-        .frame(minWidth: 720, minHeight: 600)
+        .frame(minWidth: 820)
         .background(Color(NSColor.windowBackgroundColor))
     }
 
@@ -69,35 +69,47 @@ struct ContentView: View {
     // MARK: - Main pane
 
     private var meterPane: some View {
-        ScrollView {
-            VStack(spacing: 14) {
-                if let banner = vm.statusBanner {
-                    BannerLabel(text: banner)
-                }
+        VStack(spacing: 10) {
+            if let banner = vm.statusBanner {
+                BannerLabel(text: banner)
+            }
 
-                Panel {
-                    VStack(alignment: .leading, spacing: 16) {
-                        PanelHeader(
-                            title: vm.setupOpen ? "Setup overlay" : "Power & SWR",
-                            trailing: callsignAccessory
-                        )
-                        Divider()
-                        activeView
-                    }
-                }
-
-                Panel {
-                    VStack(alignment: .leading, spacing: 12) {
-                        statusRow
-                        Divider()
-                        KeypadView(vm: vm)
-                    }
+            Panel {
+                VStack(alignment: .leading, spacing: 10) {
+                    PanelHeader(
+                        title: vm.setupOpen ? "Setup overlay" : "Power & SWR",
+                        trailing: callsignAccessory
+                    )
+                    Divider()
+                    activeView
                 }
             }
-            .padding(16)
-            .frame(maxWidth: 880)
-            .frame(maxWidth: .infinity)
+
+            CompactPanel {
+                HStack(spacing: 8) {
+                    HStack(spacing: 8) {
+                        statusItem(label: "Coupler",
+                                   value: vm.snapshot?.coupler.isEmpty == false
+                                          ? (vm.snapshot?.coupler ?? "—") : "—")
+                        Spacer(minLength: 4)
+                        statusItem(label: "Power",
+                                   value: powerModeLabel)
+                        Spacer(minLength: 4)
+                        statusItem(label: "Top",
+                                   value: topModeLabel)
+                        Spacer(minLength: 4)
+                        statusItem(label: "FW",
+                                   value: vm.snapshot?.firmwareRev.isEmpty == false
+                                          ? (vm.snapshot?.firmwareRev ?? "—") : "—")
+                    }
+                    .frame(maxWidth: .infinity)
+                    Divider().frame(height: 22)
+                    KeypadView(vm: vm)
+                }
+            }
         }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .top)
         .background(Color(NSColor.windowBackgroundColor))
     }
 
@@ -120,27 +132,6 @@ struct ContentView: View {
         )
     }
 
-    private var statusRow: some View {
-        HStack(spacing: 18) {
-            statusItem(label: "Coupler",
-                       value: vm.snapshot?.coupler.isEmpty == false
-                              ? (vm.snapshot?.coupler ?? "—") : "—")
-            statusItem(label: "Power mode",
-                       value: powerModeLabel)
-            statusItem(label: "Top mode",
-                       value: topModeLabel)
-            statusItem(label: "Firmware",
-                       value: vm.snapshot?.firmwareRev.isEmpty == false
-                              ? (vm.snapshot?.firmwareRev ?? "—") : "—")
-            Spacer()
-            if vm.connection != .connected {
-                Label("Not connected", systemImage: "wifi.slash")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
     private var powerModeLabel: String {
         switch vm.snapshot?.powerMode {
         case .net: return "Net (F−R)"
@@ -161,15 +152,34 @@ struct ContentView: View {
     }
 
     private func statusItem(label: String, value: String, tint: Color = .primary) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 1) {
             Text(label)
-                .font(.caption)
+                .font(.system(size: 9))
                 .foregroundStyle(.secondary)
             Text(value)
-                .font(.body.weight(.medium))
+                .font(.system(size: 11, weight: .medium))
                 .foregroundColor(tint)
                 .monospacedDigit()
+                .lineLimit(1)
         }
+    }
+}
+
+private struct CompactPanel<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        content()
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(.regularMaterial)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(Color.secondary.opacity(0.15), lineWidth: 0.5)
+            )
     }
 }
 

@@ -8,14 +8,14 @@ struct Panel<Content: View>: View {
 
     var body: some View {
         content()
-            .padding(16)
+            .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(.regularMaterial)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .strokeBorder(Color.secondary.opacity(0.15), lineWidth: 0.5)
             )
     }

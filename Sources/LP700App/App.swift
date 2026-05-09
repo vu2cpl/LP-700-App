@@ -29,6 +29,7 @@ struct LP700App: App {
         }
         .commands { menuCommands }
         .windowResizability(.contentMinSize)
+        .defaultSize(width: 820, height: 380)
 
         Settings {
             PreferencesView(vm: vm)

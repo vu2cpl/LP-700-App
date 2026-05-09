@@ -60,13 +60,13 @@ LP-700-App/
 │   ├── ViewModels/
 │   │   └── MeterViewModel.swift        # @MainActor source-of-truth
 │   ├── Views/
-│   │   ├── ContentView.swift           # toolbar + body composition
-│   │   ├── PowerSWRView.swift          # Avg/Peak/SWR + channel + range + peak-mode + alarm
-│   │   ├── KeypadView.swift            # bottom-row controls
+│   │   ├── ContentView.swift           # toolbar + body composition + bottom CompactPanel (status + keypad)
+│   │   ├── PowerSWRView.swift          # Avg/Peak/SWR cards (with bars) + ControlsCard (CH/Rng/Mode/Alm cycles)
+│   │   ├── KeypadView.swift            # inline keypad row (Range / Alarm / LCD Mode / Resync)
 │   │   ├── ConnectionSheet.swift       # first-launch sheet (Cmd+K)
 │   │   ├── PreferencesView.swift       # Settings scene (Cmd+,)
 │   │   ├── SetupOverlay.swift          # log-level picker + backend annotation
-│   │   └── Panel.swift                 # reusable regularMaterial card
+│   │   └── Panel.swift                 # reusable regularMaterial card (Panel + CompactPanel)
 │   └── MenuBar/
 │       └── MenuBarContent.swift        # MenuBarExtra label + popover
 ├── Tests/LP700AppTests/
@@ -155,9 +155,10 @@ checkbox to keep the new tag out of "latest".
 ## Things to watch out for
 
 - **`auto_channel` vs `channel`.** When `auto_channel == true`, the
-  numeric `channel` may still hold the *currently active* slot. UI
-  should show "CH Auto" highlighted, not "CH N". `PowerSWRView`
-  handles this with `data.autoChannel == true ? autoActive : (!data.autoChannel && data.channel == i)`.
+  numeric `channel` may still hold the *currently active* slot. The
+  UI shows `CH A` (not `CH 1..4`) in this state. `PowerSWRView`'s
+  `ControlsCard.channelLabel` handles the formatting; the cycle
+  advances 0 (auto) → 1 → 2 → 3 → 4 → 0 via `channel_step`.
 - **Peak Power display follows `peak_mode`.** The wire frame carries
   two distinct fields: `power_peak_w` (live envelope peak, bytes 23-24,
   decays on key-up) and `peak_hold_w` (firmware-maintained held peak,
@@ -171,9 +172,35 @@ checkbox to keep the new tag out of "latest".
   the banner when empty — don't show a stale message.
 - **The server fans out a snapshot on connect.** Don't issue `resync`
   preemptively on connect — the hub already does it.
-- **No bargraphs yet.** `PowerSWRView` is large numeric readouts only.
-  Bargraphs are an explicit v0.2 follow-up; LP-100A-App's
-  `BargraphView.swift` is the model to port.
+- **Range and Alarm are per-channel; firmware ignores them in
+  auto-channel mode.** F3 (`range_step`) and F4 (`alarm_toggle`) are
+  silently dropped by the LP-500/700 firmware when `auto_channel == true`.
+  The server NACKs both verbs in this state with a reason (surfaces in
+  `MeterViewModel.statusBanner`); the UI also greys out the Range / Alarm
+  cycle buttons inside `PowerSWRView`'s `ControlsCard` (and the duplicate
+  Range/Alarm keys in `KeypadView`) when `autoChannel == true`, with a
+  caption pointing at CH 1–4. The Channel button stays enabled so the
+  user can cycle out. Only `range_step` and `alarm_toggle` are gated —
+  `peak_toggle`, `channel_step`, `mode_step` work in any channel state.
+- **Single Controls card with cycle-on-press buttons.** As of the v0.3
+  redesign, `PowerSWRView` no longer has separate Channel pills, a
+  Range card, a Peak-mode segmented control, and an Alarm card. They
+  collapsed into one `ControlsCard` with four inline-label buttons:
+  `CH A/1/2/3/4`, `Rng auto/5W/.../10K`, `Mode Hold/Avg/Tune`, and
+  `Alm Off/On/TRIP`. Each button shows the current value as its face
+  and advances on press. `ContentView.meterPane` is now a non-scrolling
+  `VStack` (the previous `ScrollView` blocked `.windowResizability(.contentMinSize)`
+  from computing a proper floor); status row (Coupler / Power / Top
+  / FW) lives inline with the `KeypadView` row in a single `CompactPanel`.
+- **Power-scale bars in Avg/Peak cards.** `PowerSWRView` renders a
+  horizontal scale bar inside the Average and Peak power cards
+  (cyan / orange, with yellow ≥80 % and red ≥95 % overload tinting).
+  Full-scale derives from the meter's reported `range` (5W..10K) when
+  fixed; when `range == "auto"` (typical CH-Auto case) `autoScale()`
+  picks the smallest standard scale ≥ the highest power in the current
+  snapshot, using `peakHoldW` and the VM's decayed `peakPeak` as sticky
+  inputs to keep the scale stable across a transmission envelope.
+  Mirrors how the meter's hardware auto-range chooses scale.
 
 ## Sources / links
 
