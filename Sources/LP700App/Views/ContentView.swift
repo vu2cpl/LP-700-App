@@ -19,7 +19,7 @@ struct ContentView: View {
         .sheet(isPresented: $vm.connectionSheetOpen) {
             ConnectionSheet(vm: vm) { vm.connectionSheetOpen = false }
         }
-        .frame(minWidth: 720, minHeight: 440)
+        .frame(minWidth: 820)
         .background(Color(NSColor.windowBackgroundColor))
     }
 
@@ -87,16 +87,22 @@ struct ContentView: View {
 
             CompactPanel {
                 HStack(spacing: 8) {
-                    statusItem(label: "Coupler",
-                               value: vm.snapshot?.coupler.isEmpty == false
-                                      ? (vm.snapshot?.coupler ?? "—") : "—")
-                    statusItem(label: "Power",
-                               value: powerModeLabel)
-                    statusItem(label: "Top",
-                               value: topModeLabel)
-                    statusItem(label: "FW",
-                               value: vm.snapshot?.firmwareRev.isEmpty == false
-                                      ? (vm.snapshot?.firmwareRev ?? "—") : "—")
+                    HStack(spacing: 8) {
+                        statusItem(label: "Coupler",
+                                   value: vm.snapshot?.coupler.isEmpty == false
+                                          ? (vm.snapshot?.coupler ?? "—") : "—")
+                        Spacer(minLength: 4)
+                        statusItem(label: "Power",
+                                   value: powerModeLabel)
+                        Spacer(minLength: 4)
+                        statusItem(label: "Top",
+                                   value: topModeLabel)
+                        Spacer(minLength: 4)
+                        statusItem(label: "FW",
+                                   value: vm.snapshot?.firmwareRev.isEmpty == false
+                                          ? (vm.snapshot?.firmwareRev ?? "—") : "—")
+                    }
+                    .frame(maxWidth: .infinity)
                     Divider().frame(height: 22)
                     KeypadView(vm: vm)
                 }

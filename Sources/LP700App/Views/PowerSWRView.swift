@@ -23,6 +23,7 @@ struct PowerSWRView: View {
                 ReadingCard(label: "SWR",
                             value: formatSWR(vm.snapshot?.swr),
                             tint: swrTint(vm.snapshot?.swr ?? 1.0))
+                    .frame(maxHeight: .infinity)
                 ControlsCard(snapshot: vm.snapshot,
                              channelDisabled: controlsDisabled,
                              rangeDisabled: rangeDisabled,
@@ -33,7 +34,9 @@ struct PowerSWRView: View {
                              onRangeStep:   { vm.sendRangeStep() },
                              onPeakStep:    { vm.sendPeakToggle($0) },
                              onAlarmToggle: { vm.sendAlarmToggle() })
+                    .frame(maxHeight: .infinity)
             }
+            .fixedSize(horizontal: false, vertical: true)
 
             if let msg = vm.snapshot?.statusMessage, !msg.isEmpty {
                 Label(msg, systemImage: "exclamationmark.bubble")
@@ -245,11 +248,13 @@ private struct ControlsCard: View {
                     onAlarmToggle()
                 }
             }
-            if let rangeNote {
-                Text(rangeNote)
-                    .font(.system(size: 9))
-                    .foregroundStyle(.secondary)
-            }
+            // Always reserve space for the lock note so the card height
+            // doesn't change when the user cycles between CH A and CH 1–4.
+            Text(rangeNote ?? " ")
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+                .opacity(rangeNote == nil ? 0 : 1)
+                .lineLimit(1)
         }
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -315,6 +320,8 @@ private struct ControlsCard: View {
                 Text(title)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
                 Text(value)
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
                     .monospacedDigit()
