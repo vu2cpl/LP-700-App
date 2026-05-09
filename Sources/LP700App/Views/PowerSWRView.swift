@@ -13,16 +13,19 @@ struct PowerSWRView: View {
                             value: formatPower(vm.snapshot?.powerAvgW),
                             tint: .accentColor,
                             bar: powerBar(for: vm.snapshot?.powerAvgW, baseTint: .cyan))
+                    .equatable()
                 ReadingCard(label: "Peak power",
                             value: formatPower(vm.snapshot?.displayedPeakW),
                             tint: .accentColor,
                             bar: powerBar(for: vm.snapshot?.displayedPeakW, baseTint: .orange))
+                    .equatable()
             }
 
             HStack(alignment: .top, spacing: 8) {
                 ReadingCard(label: "SWR",
                             value: formatSWR(vm.snapshot?.swr),
                             tint: swrTint(vm.snapshot?.swr ?? 1.0))
+                    .equatable()
                     .frame(maxHeight: .infinity)
                 ControlsCard(snapshot: vm.snapshot,
                              channelDisabled: controlsDisabled,
@@ -71,16 +74,16 @@ struct PowerSWRView: View {
 
     private let perChannelLockNote = "Switch to CH 1–4 to use; auto-channel locks per-channel settings."
 
-    private func formatPower(_ w: Double?) -> (value: String, unit: String) {
-        guard let w, !w.isNaN else { return ("—", "W") }
-        if w >= 1000 { return (String(format: "%.2f", w / 1000.0), "kW") }
-        if w >= 100  { return (String(format: "%.0f", w), "W") }
-        return (String(format: "%.1f", w), "W")
+    private func formatPower(_ w: Double?) -> ReadingCard.ReadingValue {
+        guard let w, !w.isNaN else { return .init(value: "—", unit: "W") }
+        if w >= 1000 { return .init(value: String(format: "%.2f", w / 1000.0), unit: "kW") }
+        if w >= 100  { return .init(value: String(format: "%.0f", w), unit: "W") }
+        return .init(value: String(format: "%.1f", w), unit: "W")
     }
 
-    private func formatSWR(_ s: Double?) -> (value: String, unit: String) {
-        guard let s, !s.isNaN else { return ("—", "") }
-        return (String(format: "%.2f", s), "")
+    private func formatSWR(_ s: Double?) -> ReadingCard.ReadingValue {
+        guard let s, !s.isNaN else { return .init(value: "—", unit: "") }
+        return .init(value: String(format: "%.2f", s), unit: "")
     }
 
     private func swrTint(_ swr: Double) -> Color {
@@ -92,7 +95,13 @@ struct PowerSWRView: View {
     private func powerBar(for watts: Double?, baseTint: Color) -> ReadingCard.BarConfig {
         let scale = fullScaleW(vm.snapshot?.range) ?? autoScale(vm.snapshot)
         let w = watts ?? 0
-        return ReadingCard.BarConfig(fraction: w / scale, scale: scale, baseTint: baseTint)
+        // Quantize the bar fraction to 1 % steps. The eye can't resolve
+        // finer movement on a 6-pt bar, and step-quantising means the
+        // surrounding ReadingCard's Equatable check skips body
+        // re-evaluation when two adjacent samples land in the same step.
+        let raw = w / scale
+        let quantized = (raw * 100).rounded() / 100
+        return ReadingCard.BarConfig(fraction: quantized, scale: scale, baseTint: baseTint)
     }
 
     private func fullScaleW(_ range: String?) -> Double? {
@@ -115,12 +124,13 @@ struct PowerSWRView: View {
 
     // Fallback when range is "auto" or unknown (the typical CH Auto
     // case): pick the smallest standard scale that comfortably contains
-    // the highest power seen — same idea as the meter's hardware
-    // auto-range. peakHoldW is the firmware-maintained sticky peak,
-    // which gives a stable scale across the natural envelope of a
-    // transmission rather than flicking with every snapshot.
+    // the highest power in the current snapshot. `peakHoldW` is the
+    // firmware-maintained sticky peak (server fc9bde0+), which gives a
+    // stable scale across the natural envelope of a transmission and
+    // resets cleanly the moment the operator clears Peak Hold on the
+    // meter — no client-side decay loop needed.
     private func autoScale(_ snap: Snapshot?) -> Double {
-        let peak = max(snap?.powerPeakW ?? 0, snap?.peakHoldW ?? 0, snap?.powerAvgW ?? 0, vm.peakPeak)
+        let peak = max(snap?.powerPeakW ?? 0, snap?.peakHoldW ?? 0, snap?.powerAvgW ?? 0)
         let standards: [Double] = [5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
         return standards.first(where: { $0 >= peak }) ?? 10000
     }
@@ -128,16 +138,33 @@ struct PowerSWRView: View {
 
 // MARK: - Pieces
 
-private struct ReadingCard: View {
+private struct ReadingCard: View, Equatable {
     var label: String
-    var value: (value: String, unit: String)
+    var value: ReadingValue
     var tint: Color
     var bar: BarConfig? = nil
 
-    struct BarConfig {
+    // Tuple-typed (String, String) isn't Equatable on its own; lift to
+    // a small struct so SwiftUI's `.equatable()` can short-circuit body
+    // re-evaluation when the displayed value hasn't changed since the
+    // last frame (extremely common after `formatPower` rounds two
+    // adjacent samples to the same display string).
+    struct ReadingValue: Equatable {
+        var value: String
+        var unit: String
+    }
+
+    struct BarConfig: Equatable {
         var fraction: Double
         var scale: Double
         var baseTint: Color
+    }
+
+    static func == (lhs: ReadingCard, rhs: ReadingCard) -> Bool {
+        lhs.label == rhs.label
+            && lhs.value == rhs.value
+            && lhs.tint == rhs.tint
+            && lhs.bar == rhs.bar
     }
 
     var body: some View {
@@ -180,7 +207,7 @@ private struct ReadingCard: View {
     }
 }
 
-private struct PowerBar: View {
+private struct PowerBar: View, Equatable {
     var fraction: Double
     var baseTint: Color
 
@@ -201,7 +228,10 @@ private struct PowerBar: View {
             }
         }
         .frame(height: 6)
-        .animation(.easeOut(duration: 0.15), value: fraction)
+        // No `.animation(value: fraction)` — implicit animations run a
+        // 60 Hz CoreAnimation transaction until they settle, and at the
+        // 10 Hz mutation rate we never settle. The fraction is already
+        // quantized at construction time, so changes step-jump cleanly.
     }
 }
 

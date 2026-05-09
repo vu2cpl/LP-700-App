@@ -26,6 +26,17 @@ actor WSClient {
     // 2× the server's default heartbeat_ms (2000), matching the embedded
     // reference web client's reconnect cadence.
     private let heartbeatTimeoutNs: UInt64 = 4_000_000_000
+    // Coalesce telemetry frames at the receive side so JSONDecoder runs
+    // at most ~10 Hz regardless of the meter's poll cadence (typically
+    // 25 Hz). Heartbeat/status/ack frames are always decoded — they're
+    // either rare (status/ack) or already emitted at ~0.5 Hz (heartbeat).
+    private let telemetryMinInterval: TimeInterval = 0.1
+    private var lastTelemetryDecodedAt: Date = .distantPast
+    // `"power_avg_w"` is unique to telemetry frames (the meter snapshot
+    // body) and the server's alphabetical key ordering puts it near the
+    // start of the wire bytes — cheaper to find than `"type":"telemetry"`
+    // which appears last.
+    private static let telemetryHint = "\"power_avg_w\""
     private var lastFrameAt: ContinuousClock.Instant = .now
     private var receiveTask: Task<Void, Never>?
     private var watchdogTask: Task<Void, Never>?
@@ -125,12 +136,35 @@ actor WSClient {
     private func handle(message: URLSessionWebSocketTask.Message) async {
         lastFrameAt = .now
         let data: Data?
+        let raw: String?
         switch message {
-        case .data(let d): data = d
-        case .string(let s): data = s.data(using: .utf8)
-        @unknown default: data = nil
+        case .data(let d):
+            data = d
+            raw = String(data: d, encoding: .utf8)
+        case .string(let s):
+            data = s.data(using: .utf8)
+            raw = s
+        @unknown default:
+            data = nil
+            raw = nil
         }
         guard let data else { return }
+
+        // Telemetry frames dominate the wire (~25 Hz) and are ~500 bytes
+        // each; status/ack/heartbeat are rare and tiny. Drop telemetry
+        // frames inside the throttle window without paying for JSON
+        // decode. The server emits keys in alphabetical order so we can
+        // search the whole text cheaply (one substring scan, no decode);
+        // `"power_avg_w"` is unique to telemetry frames and lands inside
+        // the embedded `data` object that's serialised first.
+        if let raw, raw.contains(Self.telemetryHint) {
+            let now = Date()
+            if now.timeIntervalSince(lastTelemetryDecodedAt) < telemetryMinInterval {
+                return
+            }
+            lastTelemetryDecodedAt = now
+        }
+
         do {
             let frame = try JSONDecoder().decode(ServerFrame.self, from: data)
             emit(.frame(frame))

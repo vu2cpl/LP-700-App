@@ -28,15 +28,6 @@ final class MeterViewModel: ObservableObject {
         return true
     }
 
-    // Sticky peaks (used by the bargraphs). Decay 5 %/frame after 1.5 s
-    // of no new max — same shape the LP-100A-App uses.
-    @Published var peakAvg: Double = 0
-    @Published var peakPeak: Double = 0
-    @Published var peakSwr: Double = 1.0
-    private var peakAvgAt: Date = .distantPast
-    private var peakPeakAt: Date = .distantPast
-    private var peakSwrAt: Date = .distantPast
-
     // Server log level (read from /api/log-level)
     @Published var serverLogLevel: String = "error"
     @Published var setupOpen: Bool = false
@@ -45,17 +36,26 @@ final class MeterViewModel: ObservableObject {
     private var lastAlarmTripped: Bool = false
     private var lastAlarmAt: Date = .distantPast
 
+    // UI publish coalescing. The server pushes telemetry at the meter's
+    // poll cadence (~25 Hz on real hardware, similar on the simulator),
+    // but a human can't read more than ~5 numbers/second. Coalesce to
+    // 10 Hz so SwiftUI body re-evaluation cost (and the menu-bar label
+    // re-render that happens on every objectWillChange) is bounded.
+    // Alarm edges and status banners still process on every inbound
+    // frame so notifications stay timely.
+    private static let publishInterval: TimeInterval = 0.1  // 100 ms (10 Hz)
+    private var pendingSnapshot: Snapshot?
+    private var publishTask: Task<Void, Never>?
+    private var lastPublishAt: Date = .distantPast
+
     // Net
     private var ws: WSClient?
     private var configClient: ConfigClient?
     private var listenTask: Task<Void, Never>?
-    private var decayTask: Task<Void, Never>?
 
     private let log = Logger(subsystem: "com.vu3esv.lp700-app", category: "viewmodel")
 
-    init() {
-        startDecayLoop()
-    }
+    init() {}
 
     // MARK: - Connection management
 
@@ -102,6 +102,9 @@ final class MeterViewModel: ObservableObject {
     func stop() async {
         listenTask?.cancel()
         listenTask = nil
+        publishTask?.cancel()
+        publishTask = nil
+        pendingSnapshot = nil
         await ws?.stop()
         ws = nil
     }
@@ -210,9 +213,11 @@ final class MeterViewModel: ObservableObject {
     private func applyFrame(_ frame: ServerFrame) {
         switch frame {
         case .telemetry(_, _, let data):
-            snapshot = data
-            updatePeaks(from: data)
+            // Alarm-edge detection runs on every frame so notifications
+            // are timely; the @Published snapshot is coalesced to 10 Hz
+            // to bound SwiftUI re-render cost.
             handleAlarmEdge(data: data)
+            schedulePublish(data)
         case .heartbeat:
             break
         case .status(let level, let msg):
@@ -228,38 +233,41 @@ final class MeterViewModel: ObservableObject {
         }
     }
 
+    /// Coalesces inbound telemetry to a 10 Hz @Published mutation rate.
+    /// The latest pending snapshot wins; intermediate frames are dropped
+    /// from the UI path (alarm edges still saw them upstream). If the
+    /// last publish is older than the throttle window, the new snapshot
+    /// is committed immediately; otherwise a single trailing publish is
+    /// scheduled to flush the most recent value.
+    private func schedulePublish(_ data: Snapshot) {
+        pendingSnapshot = data
+        if publishTask != nil { return }
+
+        let elapsed = Date().timeIntervalSince(lastPublishAt)
+        if elapsed >= Self.publishInterval {
+            commitPending()
+            return
+        }
+
+        let waitNs = UInt64((Self.publishInterval - elapsed) * 1_000_000_000)
+        publishTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: waitNs)
+            await MainActor.run { self?.commitPending() }
+        }
+    }
+
+    private func commitPending() {
+        publishTask = nil
+        guard let p = pendingSnapshot else { return }
+        pendingSnapshot = nil
+        snapshot = p
+        lastPublishAt = Date()
+    }
+
     private func scheduleBannerDismiss() {
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             await MainActor.run { self?.statusBanner = nil }
-        }
-    }
-
-    private func updatePeaks(from d: Snapshot) {
-        let now = Date()
-        if d.powerAvgW > peakAvg { peakAvg = d.powerAvgW; peakAvgAt = now }
-        if d.powerPeakW > peakPeak { peakPeak = d.powerPeakW; peakPeakAt = now }
-        if d.swr > peakSwr { peakSwr = d.swr; peakSwrAt = now }
-    }
-
-    private func startDecayLoop() {
-        decayTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 60_000_000) // ~16 fps
-                await MainActor.run {
-                    guard let self else { return }
-                    let now = Date()
-                    if now.timeIntervalSince(self.peakAvgAt) > 1.5 {
-                        self.peakAvg = max(0, self.peakAvg - self.peakAvg * 0.05)
-                    }
-                    if now.timeIntervalSince(self.peakPeakAt) > 1.5 {
-                        self.peakPeak = max(0, self.peakPeak - self.peakPeak * 0.05)
-                    }
-                    if now.timeIntervalSince(self.peakSwrAt) > 1.5 {
-                        self.peakSwr = max(1.0, self.peakSwr - (self.peakSwr - 1.0) * 0.05)
-                    }
-                }
-            }
         }
     }
 
