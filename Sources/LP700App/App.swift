@@ -12,7 +12,11 @@ struct LP700App: App {
     @AppStorage("menuBarItemEnabled") private var menuBarEnabled: Bool = true
 
     var body: some Scene {
-        WindowGroup {
+        // `id: "main"` lets `Environment(\.openWindow)` reach this scene
+        // by name from the MenuBarExtra popover. Without an id, the
+        // popover's "Show LP-700 Window" button could only `NSApp.activate`
+        // — which is a no-op when the window has already been closed.
+        WindowGroup(id: "main") {
             ContentView(vm: vm)
                 .background(OpenPrefsCapture())
                 .task { await bootstrap() }
@@ -36,9 +40,14 @@ struct LP700App: App {
         }
 
         MenuBarExtra(isInserted: $menuBarEnabled) {
+            // MenuBarContent reaches `\.openWindow` from its own
+            // environment — which lives inside the MenuBarExtra scene
+            // and so has access to the SwiftUI window registry. That's
+            // how it can re-open the main window after the user has
+            // closed it (when the app stays alive thanks to the
+            // menu-bar item being enabled).
             MenuBarContent(
                 vm: vm,
-                onShowMain: { showMainWindow() },
                 onConnect: { vm.connectionSheetOpen = true },
                 onQuit: { NSApp.terminate(nil) }
             )
@@ -119,14 +128,6 @@ struct LP700App: App {
         }
     }
 
-    private func showMainWindow() {
-        if let win = NSApp.windows.first(where: { $0.styleMask.contains(.titled) && $0.contentView != nil }) {
-            win.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-        } else {
-            NSApp.activate(ignoringOtherApps: true)
-        }
-    }
 }
 
 // Invisible helper that pops the Settings window when `--open-prefs` is

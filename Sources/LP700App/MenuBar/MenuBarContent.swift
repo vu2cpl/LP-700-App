@@ -26,9 +26,15 @@ struct MenuBarLabel: View {
 
 struct MenuBarContent: View {
     @ObservedObject var vm: MeterViewModel
-    var onShowMain: () -> Void
     var onConnect: () -> Void
     var onQuit: () -> Void
+
+    // SwiftUI's openWindow action — works against the WindowGroup's
+    // `id: "main"` declared in App.swift. This is the path that
+    // re-creates the main window after the user has closed it (the app
+    // stays alive thanks to the menu-bar item; AppKit alone can't
+    // bring back a destroyed SwiftUI scene window).
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -41,12 +47,12 @@ struct MenuBarContent: View {
             row("Alarm", value: alarmLabel)
             Divider()
             Button("Show LP-700 Window") {
-                onShowMain()
+                showMain()
             }
             .keyboardShortcut("o", modifiers: [.command])
             Button("Connect to Server…") {
                 onConnect()
-                onShowMain()
+                showMain()
             }
             Divider()
             Button("Quit") { onQuit() }
@@ -54,6 +60,17 @@ struct MenuBarContent: View {
         }
         .padding(8)
         .frame(width: 240)
+    }
+
+    /// Bring the main window to the foreground, re-creating it if the
+    /// user previously closed it. `openWindow(id:)` is a no-op when a
+    /// window with that id is already on screen, so it's safe to call
+    /// even from the active-window state. `NSApp.activate` makes sure
+    /// the new (or existing) window comes forward on top of whatever
+    /// app currently has focus.
+    private func showMain() {
+        openWindow(id: "main")
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     private func power(_ w: Double?) -> String {
