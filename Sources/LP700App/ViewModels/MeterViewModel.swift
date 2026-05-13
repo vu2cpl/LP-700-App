@@ -32,6 +32,11 @@ final class MeterViewModel: ObservableObject {
     @Published var serverLogLevel: String = "error"
     @Published var setupOpen: Bool = false
 
+    // Sticky-max SWR shown alongside the live SWR readout, matching the
+    // hardware LCD's "Peak: 1.50" indicator. Pure max, no decay; resets
+    // on disconnect / explicit reconnect.
+    @Published var peakSwr: Double = 1.0
+
     // Alarm-trip notification edge tracking
     private var lastAlarmTripped: Bool = false
     private var lastAlarmAt: Date = .distantPast
@@ -99,6 +104,7 @@ final class MeterViewModel: ObservableObject {
         await stop()
         connection = .disconnected
         snapshot = nil
+        peakSwr = 1.0
     }
 
     func stop() async {
@@ -263,6 +269,7 @@ final class MeterViewModel: ObservableObject {
         guard let p = pendingSnapshot else { return }
         pendingSnapshot = nil
         snapshot = p
+        if p.swr > peakSwr { peakSwr = p.swr }
         lastPublishAt = Date()
     }
 

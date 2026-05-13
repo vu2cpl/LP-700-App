@@ -36,16 +36,16 @@ struct KeypadView: View {
                       subtitle: "From server",
                       action: { vm.resync() })
                 .keyboardShortcut("y", modifiers: [.command])
-
-            Spacer()
-
+        }
+        .disabled(disabled)
+        .overlay(alignment: .trailing) {
             if !vm.allowControl {
                 Label("Read-only", systemImage: "lock.fill")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .padding(.trailing, 6)
             }
         }
-        .disabled(disabled)
     }
 
     private var alarmIcon: String {
@@ -86,9 +86,11 @@ struct KeypadView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
+                Spacer(minLength: 0)
             }
             .padding(.vertical, 2)
             .padding(.horizontal, 4)
+            .frame(maxWidth: .infinity)
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
