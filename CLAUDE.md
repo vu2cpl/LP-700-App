@@ -61,7 +61,7 @@ LP-700-App/
 │   │   └── MeterViewModel.swift        # @MainActor source-of-truth
 │   ├── Views/
 │   │   ├── ContentView.swift           # toolbar + body composition + bottom CompactPanel (status + keypad)
-│   │   ├── PowerSWRView.swift          # Avg/Peak/SWR cards (with bars) + ControlsCard (CH/Rng/Mode/Alm cycles)
+│   │   ├── PowerSWRView.swift          # PowerSWRCombinedCard (mode-driven big readout + Avg/Pk/Ref + 3 graduated bars) + ControlsCard
 │   │   ├── KeypadView.swift            # inline keypad row (Range / Alarm / LCD Mode / Resync)
 │   │   ├── ConnectionSheet.swift       # first-launch sheet (Cmd+K)
 │   │   ├── PreferencesView.swift       # Settings scene (Cmd+,)
@@ -155,10 +155,12 @@ checkbox to keep the new tag out of "latest".
 ## Things to watch out for
 
 - **`auto_channel` vs `channel`.** When `auto_channel == true`, the
-  numeric `channel` may still hold the *currently active* slot. The
-  UI shows `CH A` (not `CH 1..4`) in this state. `PowerSWRView`'s
-  `ControlsCard.channelLabel` handles the formatting; the cycle
-  advances 0 (auto) → 1 → 2 → 3 → 4 → 0 via `channel_step`.
+  numeric `channel` still holds the *currently active* slot the meter
+  is decoding. UI shows `A → N` in the Controls CH button so the
+  operator can see both that auto-channel is on *and* which channel is
+  live (mirrors the hardware LCD's "Auto Ch=1" indicator). `PowerSWRView`'s
+  `channelLabel` builds the string; the cycle advances
+  0 (auto) → 1 → 2 → 3 → 4 → 0 via `channel_step`.
 - **Peak Power display follows `peak_mode`.** The wire frame carries
   two distinct fields: `power_peak_w` (live envelope peak, bytes 23-24,
   decays on key-up) and `peak_hold_w` (firmware-maintained held peak,
@@ -186,21 +188,47 @@ checkbox to keep the new tag out of "latest".
   redesign, `PowerSWRView` no longer has separate Channel pills, a
   Range card, a Peak-mode segmented control, and an Alarm card. They
   collapsed into one `ControlsCard` with four inline-label buttons:
-  `CH A/1/2/3/4`, `Rng auto/5W/.../10K`, `Mode Hold/Avg/Tune`, and
+  `CH A→N/1/2/3/4`, `Rng auto/5W/.../10K`, `Mode Hold/Avg/Tune`, and
   `Alm Off/On/TRIP`. Each button shows the current value as its face
   and advances on press. `ContentView.meterPane` is now a non-scrolling
   `VStack` (the previous `ScrollView` blocked `.windowResizability(.contentMinSize)`
   from computing a proper floor); status row (Coupler / Power / Top
-  / FW) lives inline with the `KeypadView` row in a single `CompactPanel`.
-- **Power-scale bars in Avg/Peak cards.** `PowerSWRView` renders a
-  horizontal scale bar inside the Average and Peak power cards
-  (cyan / orange, with yellow ≥80 % and red ≥95 % overload tinting).
-  Full-scale derives from the meter's reported `range` (5W..10K) when
-  fixed; when `range == "auto"` (typical CH-Auto case) `autoScale()`
-  picks the smallest standard scale ≥ the highest power in the current
-  snapshot, using `peakHoldW` and the VM's decayed `peakPeak` as sticky
-  inputs to keep the scale stable across a transmission envelope.
-  Mirrors how the meter's hardware auto-range chooses scale.
+  / FW) sits above the `KeypadView` keypad row in a single `CompactPanel`.
+- **Hardware-style combined Power & SWR card** (v0.3.x). One unified
+  card replaces the previous Avg / Peak / SWR triple. Layout: a single
+  big mode-driven power number (Hold → Peak orange, Avg → Avg cyan,
+  Tune → Avg green) and a big severity-tinted SWR number side-by-side
+  at the top; small `Avg / Pk / Ref` inline labels under the big
+  numbers; three stacked graduated bargraphs (Avg, Pk, SWR) below.
+  Card header is mode-aware ("AVERAGE" / "PEAK" / "TUNE"). Drives off
+  `PowerSWRModel` which carries `cardLabel`, `bigPowerValue`,
+  `bigPowerTint`, the three small readings, the three bars, and the
+  scale labels — all derived in `PowerSWRModel.make`. SwiftUI
+  `.equatable()` short-circuit still wraps the subtree to keep
+  re-render cost bounded at the 5 Hz publish rate.
+- **Graduated bargraphs (18 pt tall).** Power bars carry quartile
+  ticks at 25 / 50 / 75 % of current range; SWR bar carries ticks at
+  the 1.5 and 2.0 severity thresholds on a 1.0–3.0 scale. Power axis
+  shows e.g. `0 / 5 W`; SWR axis shows `1.0 · 1.5 · 2.0 · 3.0`. Ticks
+  are 1-pt-wide hairlines drawn over the fill at 35 % black opacity so
+  they read on both filled and unfilled portions.
+- **Reflected power (Pr) is derived client-side** in `reflectedPower(swr:displayed:mode:)`.
+  Formula: ρ = (SWR − 1)/(SWR + 1); Pr = displayed · ρ² in `forward` mode,
+  Pr = displayed · ρ² / (1 − ρ²) in `net` / `delivered` modes. Shown
+  as `Ref X.X W` next to the small Avg / Pk labels under the big SWR.
+  Returns `nil` (UI shows `— W`) for SWR < 1 / no TX, so we never
+  paint a misleading 0.
+- **Auto-scale fallback** for the power bars when `range == "auto"`
+  (typical CH-Auto case): `autoScale()` picks the smallest standard
+  scale (5W..10K) ≥ the highest power in the current snapshot, using
+  `peakHoldW` + `powerPeakW` + `powerAvgW` as a max so the scale stays
+  stable across a transmission envelope. Mirrors how the meter's
+  hardware auto-range chooses scale.
+- **Window sizing matches Macexpert SPE** (sibling shack utility):
+  `.frame(minWidth: 380, minHeight: 520)` + `.defaultSize(width: 400,
+  height: 580)`. `.windowResizability(.contentMinSize)` so the user
+  can grow the window past the content floor but never shrink it
+  below the readable minimum.
 
 ## Sources / links
 

@@ -19,7 +19,7 @@ struct ContentView: View {
         .sheet(isPresented: $vm.connectionSheetOpen) {
             ConnectionSheet(vm: vm) { vm.connectionSheetOpen = false }
         }
-        .frame(minWidth: 820)
+        .frame(minWidth: 380, minHeight: 520)
         .background(Color(NSColor.windowBackgroundColor))
     }
 
@@ -81,19 +81,24 @@ struct ContentView: View {
                 BannerLabel(text: banner)
             }
 
-            Panel {
-                VStack(alignment: .leading, spacing: 10) {
-                    PanelHeader(
-                        title: vm.setupOpen ? "Setup overlay" : "Power & SWR",
-                        trailing: callsignAccessory
-                    )
-                    Divider()
-                    activeView
+            // In normal operation the inner PowerSWRCombinedCard owns its
+            // own header (which is mode-aware: "Average" / "Peak" / "Tune"),
+            // so we don't wrap it in another titled Panel. Setup overlay
+            // still gets the labelled chrome.
+            if vm.setupOpen {
+                Panel {
+                    VStack(alignment: .leading, spacing: 10) {
+                        PanelHeader(title: "Setup overlay", trailing: callsignAccessory)
+                        Divider()
+                        activeView
+                    }
                 }
+            } else {
+                activeView
             }
 
             CompactPanel {
-                HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 8) {
                         statusItem(label: "Coupler",
                                    value: vm.snapshot?.coupler.isEmpty == false
@@ -110,7 +115,7 @@ struct ContentView: View {
                                           ? (vm.snapshot?.firmwareRev ?? "—") : "—")
                     }
                     .frame(maxWidth: .infinity)
-                    Divider().frame(height: 22)
+                    Divider()
                     KeypadView(vm: vm)
                 }
             }

@@ -14,12 +14,22 @@ import SwiftUI
 // every input the cards consume is pre-computed (rounded, formatted,
 // quantized, enum-mapped) at construction time.
 struct PowerSWRModel: Equatable {
+    // Hardware-style single card: one big power number on the left
+    // (chosen by peak_mode), one big SWR on the right, small Avg/Pk
+    // indicators underneath, three bargraphs (Avg, Pk, SWR) below.
+    var cardLabel: String                // "Average" / "Peak" / "Tune"
+    var bigPowerValue: ReadingValue
+    var bigPowerTint: Color              // mode-driven (orange/cyan/green)
     var avgValue: ReadingValue
     var peakValue: ReadingValue
+    var refValue: ReadingValue           // derived from SWR + power + power_mode
     var swrValue: ReadingValue
-    var swrTint: Color
-    var avgBar: BarConfig
-    var peakBar: BarConfig
+    var swrTint: Color                   // green / yellow / red by severity
+
+    var avgBar: BarConfig                // cyan
+    var peakBar: BarConfig               // orange
+    var swrBar: BarConfig                // severity-tinted
+    var scaleLabel: String               // power axis label, e.g. "0 / 5 W"
 
     var controls: ControlsModel
     var statusMessage: String
@@ -62,14 +72,25 @@ extension PowerSWRModel {
         let autoCh = snapshot?.autoChannel == true
 
         let scale = fullScaleW(snapshot?.range) ?? autoScale(snapshot)
+        let active = activePower(snapshot)
+        let swr = snapshot?.swr ?? 1.0
+        let swrTint = swrTintColor(swr)
 
         return PowerSWRModel(
+            cardLabel: active.label,
+            bigPowerValue: formatPower(active.watts),
+            bigPowerTint: active.tint,
             avgValue: formatPower(snapshot?.powerAvgW),
             peakValue: formatPower(snapshot?.displayedPeakW),
+            refValue: formatPower(reflectedPower(swr: swr,
+                                                 displayed: snapshot?.powerAvgW,
+                                                 mode: snapshot?.powerMode)),
             swrValue: formatSWR(snapshot?.swr),
-            swrTint: swrTintColor(snapshot?.swr ?? 1.0),
+            swrTint: swrTint,
             avgBar: powerBar(for: snapshot?.powerAvgW, scale: scale, baseTint: .cyan),
             peakBar: powerBar(for: snapshot?.displayedPeakW, scale: scale, baseTint: .orange),
+            swrBar: makeSwrBar(swr, tint: swrTint),
+            scaleLabel: formatScaleLabel(scale),
             controls: ControlsModel(
                 channelLabel: channelLabel(snapshot),
                 nextChannel: nextChannel(snapshot),
@@ -92,6 +113,56 @@ extension PowerSWRModel {
 // MARK: - Pure helpers
 
 private let perChannelLockNote = "Switch to CH 1–4 to use; auto-channel locks per-channel settings."
+
+private func formatScaleLabel(_ w: Double) -> String {
+    if w >= 1000 { return String(format: "0 / %g kW", w / 1000.0) }
+    return String(format: "0 / %g W", w)
+}
+
+// The single big power number on the card. Underlying field + tint +
+// header label are driven by the meter's peak_mode so the operator can
+// tell at a glance which value they're looking at.
+private func activePower(_ snap: Snapshot?) -> (watts: Double?, tint: Color, label: String) {
+    switch snap?.peakMode {
+    case .peakHold: return (snap?.displayedPeakW, .orange, "Peak")
+    case .average:  return (snap?.powerAvgW,      .cyan,   "Average")
+    case .tune:     return (snap?.powerAvgW,      .green,  "Tune")
+    case nil:       return (snap?.powerAvgW,      .accentColor, "Power")
+    }
+}
+
+// Derives reflected power (Pr) from the displayed forward/net/delivered
+// power and the live SWR. Formula:
+//
+//   ρ = (SWR − 1) / (SWR + 1)      // reflection-coefficient magnitude
+//   Pr / Pfwd = ρ²
+//
+// In `forward` mode the displayed number is Pfwd directly. In `net` /
+// `delivered` modes the meter is showing (Pfwd − Pr), so
+// Pr = displayed · ρ² / (1 − ρ²). Returns nil when the math is
+// degenerate (SWR < 1, no TX, or matched load at the resolution limit)
+// so the UI shows "— W" instead of a misleading 0.
+private func reflectedPower(swr: Double, displayed: Double?, mode: PowerMode?) -> Double? {
+    guard let displayed, displayed > 0, swr >= 1.0 else { return nil }
+    let rho = (swr - 1.0) / (swr + 1.0)
+    let rhoSq = rho * rho
+    switch mode ?? .net {
+    case .forward:
+        return displayed * rhoSq
+    case .net, .delivered:
+        guard rhoSq < 0.999 else { return nil }   // pathological full reflection
+        return displayed * rhoSq / (1.0 - rhoSq)
+    }
+}
+
+// Map SWR (1.0–3.0+) onto a 0–100% bar fill with the same severity
+// tints used for the numeric readout: green ≤1.5, yellow ≤2.0, red ≥2.0.
+// Anything above 3:1 clips to full-scale (already in the red zone).
+private func makeSwrBar(_ swr: Double, tint: Color) -> BarConfig {
+    let raw = max(0, min(1, (swr - 1.0) / 2.0))
+    let quantized = (raw * 100).rounded() / 100
+    return BarConfig(fraction: quantized, scale: 3.0, baseTint: tint)
+}
 
 private func formatPower(_ w: Double?) -> ReadingValue {
     guard let w, !w.isNaN else { return .init(value: "—", unit: "W") }
@@ -155,7 +226,10 @@ private func autoScale(_ snap: Snapshot?) -> Double {
 
 private func channelLabel(_ s: Snapshot?) -> String {
     guard let s else { return "—" }
-    return s.autoChannel ? "A" : "\(s.channel)"
+    // In CH Auto, also surface the channel the meter is currently
+    // decoding so the operator can tell which per-channel settings are
+    // active (matches the hardware LCD's "Auto Ch=1" indicator).
+    return s.autoChannel ? "A → \(s.channel)" : "\(s.channel)"
 }
 
 // Cycle order: Auto → 1 → 2 → 3 → 4 → Auto. Server's `channel_step`
@@ -225,33 +299,25 @@ struct PowerSWRView: View, Equatable {
 
     var body: some View {
         VStack(spacing: 8) {
-            HStack(alignment: .top, spacing: 8) {
-                ReadingCard(label: "Average power",
-                            value: model.avgValue,
-                            tint: .accentColor,
-                            bar: model.avgBar)
-                    .equatable()
-                ReadingCard(label: "Peak power",
-                            value: model.peakValue,
-                            tint: .accentColor,
-                            bar: model.peakBar)
-                    .equatable()
-            }
+            PowerSWRCombinedCard(big: model.bigPowerValue,
+                                 bigTint: model.bigPowerTint,
+                                 avg: model.avgValue,
+                                 peak: model.peakValue,
+                                 ref: model.refValue,
+                                 swr: model.swrValue,
+                                 swrTint: model.swrTint,
+                                 avgBar: model.avgBar,
+                                 peakBar: model.peakBar,
+                                 swrBar: model.swrBar,
+                                 scaleLabel: model.scaleLabel,
+                                 label: model.cardLabel)
+                .equatable()
 
-            HStack(alignment: .top, spacing: 8) {
-                ReadingCard(label: "SWR",
-                            value: model.swrValue,
-                            tint: model.swrTint)
-                    .equatable()
-                    .frame(maxHeight: .infinity)
-                ControlsCard(model: model.controls,
-                             onChannelStep: { vm.sendChannelStep($0) },
-                             onRangeStep:   { vm.sendRangeStep() },
-                             onPeakStep:    { vm.sendPeakToggle($0) },
-                             onAlarmToggle: { vm.sendAlarmToggle() })
-                    .frame(maxHeight: .infinity)
-            }
-            .fixedSize(horizontal: false, vertical: true)
+            ControlsCard(model: model.controls,
+                         onChannelStep: { vm.sendChannelStep($0) },
+                         onRangeStep:   { vm.sendRangeStep() },
+                         onPeakStep:    { vm.sendPeakToggle($0) },
+                         onAlarmToggle: { vm.sendAlarmToggle() })
 
             if !model.statusMessage.isEmpty {
                 Label(model.statusMessage, systemImage: "exclamationmark.bubble")
@@ -271,40 +337,79 @@ struct PowerSWRView: View, Equatable {
 
 // MARK: - Pieces
 
-private struct ReadingCard: View, Equatable {
-    var label: String
-    var value: ReadingValue
-    var tint: Color
-    var bar: BarConfig? = nil
+// Hardware-style combined card: ONE big power number (mode-driven) and
+// ONE big SWR side-by-side at the top, small Avg / Pk numeric labels
+// just under the power number, then three stacked bargraphs (Avg, Pk,
+// SWR) spanning the full width of the card. Mirrors the LP-700 LCD's
+// main display — at-a-glance reading from across the shack.
+private struct PowerSWRCombinedCard: View, Equatable {
+    var big: ReadingValue
+    var bigTint: Color
+    var avg: ReadingValue
+    var peak: ReadingValue
+    var ref: ReadingValue
+    var swr: ReadingValue
+    var swrTint: Color
+    var avgBar: BarConfig
+    var peakBar: BarConfig
+    var swrBar: BarConfig
+    var scaleLabel: String
 
-    static func == (lhs: ReadingCard, rhs: ReadingCard) -> Bool {
-        lhs.label == rhs.label
-            && lhs.value == rhs.value
-            && lhs.tint == rhs.tint
-            && lhs.bar == rhs.bar
-    }
+    var label: String     // "Average" / "Peak" / "Tune"
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 8) {
             PanelHeader(title: label)
-            HStack(alignment: .lastTextBaseline, spacing: 4) {
-                Text(value.value)
-                    .font(.system(size: 40, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundColor(tint)
-                if !value.unit.isEmpty {
-                    Text(value.unit)
-                        .font(.system(size: 16))
-                        .foregroundStyle(.secondary)
+
+            // Big numbers row: mode-power on the left, SWR on the right.
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(big.value)
+                        .font(.system(size: 72, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundColor(bigTint)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                    if !big.unit.isEmpty {
+                        Text(big.unit)
+                            .font(.system(size: 22))
+                            .foregroundStyle(.secondary)
+                    }
                 }
+                Spacer(minLength: 0)
+                Text(swr.value)
+                    .font(.system(size: 72, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundColor(swrTint)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
             }
-            if let bar {
-                PowerBar(fraction: bar.fraction, baseTint: bar.baseTint)
-                Text("0 / \(formatScale(bar.scale))")
+
+            // Small Avg / Pk under the big power, Ref under the big SWR.
+            HStack(alignment: .firstTextBaseline, spacing: 14) {
+                smallInline(label: "Avg", value: avg, tint: .cyan)
+                smallInline(label: "Pk",  value: peak, tint: .orange)
+                Spacer(minLength: 0)
+                smallInline(label: "Ref", value: ref, tint: .secondary)
+            }
+
+            // Three stacked bargraphs (Avg, Pk, SWR). Power bars share a
+            // scale (full = current range), SWR bar uses 1.0–3.0 with
+            // ticks at the 1.5 and 2.0 severity thresholds.
+            VStack(alignment: .leading, spacing: 6) {
+                barRow(label: "Avg", bar: avgBar, ticks: [0.25, 0.5, 0.75])
+                barRow(label: "Pk",  bar: peakBar, ticks: [0.25, 0.5, 0.75])
+                Text(scaleLabel)
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                barRow(label: "SWR", bar: swrBar, ticks: [0.25, 0.5])
+                Text("1.0 · 1.5 · 2.0 · 3.0")
                     .font(.system(size: 9))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
+            .padding(.top, 2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
@@ -318,15 +423,44 @@ private struct ReadingCard: View, Equatable {
         )
     }
 
-    private func formatScale(_ w: Double) -> String {
-        if w >= 1000 { return String(format: "%g kW", w / 1000.0) }
-        return String(format: "%g W", w)
+    @ViewBuilder
+    private func smallInline(label: String, value: ReadingValue, tint: Color) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 3) {
+            Text(label)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+            Text(value.value)
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundColor(tint)
+            if !value.unit.isEmpty {
+                Text(value.unit)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func barRow(label: String, bar: BarConfig, ticks: [Double]) -> some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 26, alignment: .leading)
+            PowerBar(fraction: bar.fraction, baseTint: bar.baseTint, ticks: ticks)
+        }
     }
 }
 
 private struct PowerBar: View {
     var fraction: Double
     var baseTint: Color
+    /// Tick positions along the bar in 0…1, drawn as short hairline
+    /// notches over the fill. Default = quartile ticks for power bars;
+    /// SWR bars override with [0.25, 0.5] (the 1.5 / 2.0 SWR thresholds
+    /// on a 1.0–3.0 scale).
+    var ticks: [Double] = [0.25, 0.5, 0.75]
 
     var body: some View {
         let f = max(0, min(1, fraction))
@@ -342,9 +476,15 @@ private struct PowerBar: View {
                 Capsule()
                     .fill(color.gradient)
                     .frame(width: max(2, geo.size.width * f))
+                ForEach(ticks, id: \.self) { t in
+                    Rectangle()
+                        .fill(Color.black.opacity(0.35))
+                        .frame(width: 1)
+                        .offset(x: geo.size.width * t)
+                }
             }
         }
-        .frame(height: 6)
+        .frame(height: 18)
     }
 }
 
