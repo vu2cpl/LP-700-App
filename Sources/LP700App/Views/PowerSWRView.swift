@@ -71,7 +71,15 @@ extension PowerSWRModel {
         let baseDisabled = !allowControl || !connected || setupOpen
         let autoCh = snapshot?.autoChannel == true
 
-        let scale = fullScaleW(snapshot?.range) ?? autoScale(snapshot)
+        // Always auto-scale the bargraph for the visual display, even
+        // when the meter has a manual range set. The meter's range
+        // setting still matters on the hardware (alarms are indexed
+        // to it, the meter's LCD bargraph uses it) but is irrelevant
+        // for the App's display — a 2 W signal on a 500 W manual
+        // range would otherwise show as a 0.4 % sliver, which is
+        // illegible. The range label still shows the meter's actual
+        // setting; the bar's full-scale is computed from live power.
+        let scale = autoScale(snapshot)
         let active = activePower(snapshot)
         let swr = snapshot?.swr ?? 1.0
         let swrTint = swrTintColor(swr)
@@ -100,10 +108,17 @@ extension PowerSWRModel {
                 alarmLabel: alarmLabel(snapshot),
                 alarmTint: alarmTint(snapshot),
                 channelDisabled: baseDisabled,
-                rangeDisabled: baseDisabled || autoCh,
+                // Range is per-channel on the meter, but F3 / range_step
+                // is accepted by the firmware in pwr/swr mode regardless
+                // of auto-channel state — pressing it cycles the
+                // currently auto-locked channel's range. (Earlier this
+                // was gated with `|| autoCh` based on a misread of an
+                // empirical probe; corrected 2026-05-16 against the
+                // bench LP-700.)
+                rangeDisabled: baseDisabled,
                 peakDisabled: baseDisabled,
                 alarmDisabled: baseDisabled || autoCh,
-                rangeNote: autoCh ? perChannelLockNote : nil
+                rangeNote: nil
             ),
             statusMessage: snapshot?.statusMessage ?? ""
         )
@@ -111,8 +126,6 @@ extension PowerSWRModel {
 }
 
 // MARK: - Pure helpers
-
-private let perChannelLockNote = "Switch to CH 1–4 to use; auto-channel locks per-channel settings."
 
 private func formatScaleLabel(_ w: Double) -> String {
     if w >= 1000 { return String(format: "0 / %g kW", w / 1000.0) }
@@ -193,34 +206,20 @@ private func powerBar(for watts: Double?, scale: Double, baseTint: Color) -> Bar
     return BarConfig(fraction: quantized, scale: scale, baseTint: baseTint)
 }
 
-private func fullScaleW(_ range: String?) -> Double? {
-    guard let r = range?.lowercased(), !r.isEmpty, r != "auto" else { return nil }
-    switch r {
-    case "5w":   return 5
-    case "10w":  return 10
-    case "25w":  return 25
-    case "50w":  return 50
-    case "100w": return 100
-    case "250w": return 250
-    case "500w": return 500
-    case "1k":   return 1000
-    case "2.5k": return 2500
-    case "5k":   return 5000
-    case "10k":  return 10000
-    default:     return nil
-    }
-}
-
-// Fallback when range is "auto" or unknown (the typical CH-Auto case):
-// pick the smallest standard scale that comfortably contains the highest
-// power in the current snapshot. `peakHoldW` is the firmware-maintained
-// sticky peak (server fc9bde0+), which gives a stable scale across the
-// natural envelope of a transmission and resets cleanly the moment the
+// Bargraph full-scale: pick the smallest standard scale that
+// comfortably contains the highest power in the current snapshot.
+// `peakHoldW` is the firmware-maintained sticky peak (server
+// fc9bde0+), which gives a stable scale across the natural envelope
+// of a transmission and resets cleanly the moment the
 // operator clears Peak Hold on the meter — no client-side decay loop
 // needed.
 private func autoScale(_ snap: Snapshot?) -> Double {
     let peak = max(snap?.powerPeakW ?? 0, snap?.peakHoldW ?? 0, snap?.powerAvgW ?? 0)
-    let standards: [Double] = [5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
+    // 1-2-5 progression below 10W (QRP regime), then matches the
+    // LP-700's hardware range ladder (10, 25, 50, 100, 250, 500, 1K,
+    // 2.5K, 5K, 10K) above so the App display steps align with the
+    // meter's physical range labels.
+    let standards: [Double] = [1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
     return standards.first(where: { $0 >= peak }) ?? 10000
 }
 

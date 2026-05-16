@@ -174,16 +174,15 @@ checkbox to keep the new tag out of "latest".
   the banner when empty — don't show a stale message.
 - **The server fans out a snapshot on connect.** Don't issue `resync`
   preemptively on connect — the hub already does it.
-- **Range and Alarm are per-channel; firmware ignores them in
-  auto-channel mode.** F3 (`range_step`) and F4 (`alarm_toggle`) are
-  silently dropped by the LP-500/700 firmware when `auto_channel == true`.
-  The server NACKs both verbs in this state with a reason (surfaces in
-  `MeterViewModel.statusBanner`); the UI also greys out the Range / Alarm
-  cycle buttons inside `PowerSWRView`'s `ControlsCard` (and the duplicate
-  Range/Alarm keys in `KeypadView`) when `autoChannel == true`, with a
-  caption pointing at CH 1–4. The Channel button stays enabled so the
-  user can cycle out. Only `range_step` and `alarm_toggle` are gated —
-  `peak_toggle`, `channel_step`, `mode_step` work in any channel state.
+- **Range and Alarm are per-channel.** The LP-500 user-guide v5.4
+  page 4 documents: "The selection is indexed to the current channel
+  selection and is saved in memory" for both Range and Alarm. The
+  meter's front-panel F3 / F4 buttons cycle the *auto-locked
+  channel's* per-channel setting in CH Auto, so the App's
+  `range_step` / `alarm_toggle` verbs are enabled in any channel
+  state. (Earlier code gated these in CH Auto based on a misread
+  empirical probe — see LP-700-Server PR #3 for the corresponding
+  server-side revert.)
 - **Single Controls card with cycle-on-press buttons.** As of the v0.3
   redesign, `PowerSWRView` no longer has separate Channel pills, a
   Range card, a Peak-mode segmented control, and an Alarm card. They
@@ -218,12 +217,17 @@ checkbox to keep the new tag out of "latest".
   as `Ref X.X W` next to the small Avg / Pk labels under the big SWR.
   Returns `nil` (UI shows `— W`) for SWR < 1 / no TX, so we never
   paint a misleading 0.
-- **Auto-scale fallback** for the power bars when `range == "auto"`
-  (typical CH-Auto case): `autoScale()` picks the smallest standard
-  scale (5W..10K) ≥ the highest power in the current snapshot, using
+- **Bargraphs always auto-scale** for the display, independent of
+  the meter's range setting. `autoScale()` picks the smallest standard
+  from `[1, 2, 5, 10, 25, 50, 100, 250, 500, 1K, 2.5K, 5K, 10K]` ≥
+  the highest power in the current snapshot, using
   `peakHoldW` + `powerPeakW` + `powerAvgW` as a max so the scale stays
-  stable across a transmission envelope. Mirrors how the meter's
-  hardware auto-range chooses scale.
+  stable across a transmission envelope. (1-2-5 progression below
+  10 W for QRP resolution; matches the meter's hardware range ladder
+  above.) This is a display-side choice: a 2 W signal on a 500 W
+  manual meter range would otherwise show as a 0.4 % sliver, which
+  is illegible. The Range label still shows the meter's actual
+  setting; the bar's full-scale is computed from live power.
 - **Window sizing matches Macexpert SPE** (sibling shack utility):
   `.frame(minWidth: 380, minHeight: 520)` + `.defaultSize(width: 400,
   height: 580)`. `.windowResizability(.contentMinSize)` so the user
