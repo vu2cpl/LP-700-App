@@ -45,6 +45,40 @@ final class MeterViewModel: ObservableObject {
     // on disconnect / explicit reconnect.
     @Published var peakSwr: Double = 1.0
 
+    // Latest scope (waveform) and spectrum buffers, both 320 normalised
+    // (0..255) samples. Only populated when the meter is on the matching
+    // LCD page — the server emits them at ~4 Hz in that mode and stops
+    // when the operator switches pages. Don't render synthetic data when
+    // these are stale; show a placeholder instead.
+    @Published var lastScope: ScopePayload?
+    @Published var lastSpectrum: SpectrumPayload?
+    @Published var lastScopeAt: Date = .distantPast
+    @Published var lastSpectrumAt: Date = .distantPast
+
+    // Which top-level view ContentView should render. Purely user-
+    // driven via `sendModeStep()` — the cycle is Power/SWR → Waveform
+    // → Spectrum → Power/SWR. No autonomous switching from sample-
+    // frame arrival or telemetry top_mode (both turned out to be
+    // unstable enough to make the view flicker). The operator's
+    // intent is what the app shows; the meter's actual LCD page is
+    // assumed to follow because mode_step taps go to the meter too.
+    enum ActiveView: Equatable { case powerSWR, waveform, spectrum }
+    @Published var activeView: ActiveView = .powerSWR
+
+    // One-shot: on first telemetry frame after connect, copy
+    // `top_mode` into activeView so the app lands on whatever LCD
+    // page the meter is showing. After that, user button taps drive
+    // activeView and we don't follow the wire.
+    private var initialActiveViewSet = false
+
+    // (Control state — channel / peak_mode / alarm / range — was
+    // briefly tracked in dedicated debounced @Published fields as a
+    // workaround for a server-side bug that decoded sample-cmd HID
+    // responses as telemetry, producing flapping snapshot fields.
+    // The server is now fixed [LP-700-Server PR #2], so the snapshot
+    // is the trustworthy source of truth again. Views read
+    // `vm.snapshot?.channel` etc. directly.)
+
     // Alarm-trip notification edge tracking
     private var lastAlarmTripped: Bool = false
     private var lastAlarmAt: Date = .distantPast
@@ -151,6 +185,12 @@ final class MeterViewModel: ObservableObject {
         lastConnectError = nil
         snapshot = nil
         peakSwr = 1.0
+        lastScope = nil
+        lastSpectrum = nil
+        lastScopeAt = .distantPast
+        lastSpectrumAt = .distantPast
+        activeView = .powerSWR
+        initialActiveViewSet = false
     }
 
     func stop() async {
@@ -217,10 +257,17 @@ final class MeterViewModel: ObservableObject {
     }
 
     // MARK: - Commands
+    //
+    // Each verb just sends to the meter; the next telemetry frame
+    // reflects the new state in the @Published `snapshot`. Server is
+    // now reliable so we don't need the optimistic-update layer the
+    // older WIP carried.
 
-    /// Cycle the next range. Computes the next index from the last-known
-    /// snapshot's range label, matching the behavior of the embedded web
-    /// client's "Range:" button.
+    /// Cycle the meter range one step. Server's `range_step` verb
+    /// ignores the value parameter (firmware always advances by one);
+    /// we compute the local index from the current snapshot so
+    /// re-pressing converges even if the meter and app momentarily
+    /// disagree.
     func sendRangeStep() {
         let cycle = RangeNames.cycle
         let current = snapshot?.range ?? "auto"
@@ -239,16 +286,31 @@ final class MeterViewModel: ObservableObject {
         sendCommand(.peakToggle, value: value)
     }
 
-    /// Toggle the alarm: 0 = off, 1 = on. Reads the last-known state.
+    /// Toggle the alarm: off ↔ on. Reads current state from snapshot.
     func sendAlarmToggle() {
         let next = (snapshot?.alarmEnabled == true) ? 0 : 1
         sendCommand(.alarmToggle, value: next)
     }
 
-    /// Cycle the meter's top-level LCD mode (Power-SWR / Waveform /
-    /// Spectrum / Setup). Visible on the meter's LCD only — not in the UI.
+    /// Cycle the meter's top-level LCD mode. The app's visible cycle
+    /// is 3-mode (Power-SWR → Waveform → Spectrum → Power-SWR), but
+    /// the meter's hardware cycle is 4-mode (… → Setup → …). To keep
+    /// app and meter in lock-step we send an extra `mode_step` when
+    /// wrapping from Spectrum back to Power/SWR — that pulses the
+    /// meter from spectrum → setup → power_swr in one go, so its
+    /// physical LCD ends up on the same page as the app's view.
     func sendModeStep() {
+        let prev = activeView
+        switch prev {
+        case .powerSWR: activeView = .waveform
+        case .waveform: activeView = .spectrum
+        case .spectrum: activeView = .powerSWR
+        }
         sendCommand(.modeStep, value: nil)
+        if prev == .spectrum {
+            // Skip the meter's setup page so the cycle stays aligned.
+            sendCommand(.modeStep, value: nil)
+        }
     }
 
     func resync() { sendRaw(.resync) }
@@ -302,10 +364,21 @@ final class MeterViewModel: ObservableObject {
         switch frame {
         case .telemetry(_, _, let data):
             // Alarm-edge detection runs on every frame so notifications
-            // are timely; the @Published snapshot is coalesced to 10 Hz
+            // are timely; the @Published snapshot is coalesced to 5 Hz
             // to bound SwiftUI re-render cost.
             handleAlarmEdge(data: data)
             schedulePublish(data)
+            // Initial activeView seed: on the first telemetry frame
+            // after connect, follow the meter's top_mode. After that,
+            // activeView is purely user-driven via sendModeStep.
+            if !initialActiveViewSet {
+                initialActiveViewSet = true
+                switch data.topMode {
+                case .powerSWR, .setup: activeView = .powerSWR
+                case .waveform:         activeView = .waveform
+                case .spectrum:         activeView = .spectrum
+                }
+            }
         case .heartbeat:
             break
         case .status(let level, let msg):
@@ -316,6 +389,12 @@ final class MeterViewModel: ObservableObject {
                 statusBanner = "Server rejected: \(reason)"
                 scheduleBannerDismiss()
             }
+        case .scope(_, _, let payload):
+            lastScope = payload
+            lastScopeAt = Date()
+        case .spectrum(_, _, let payload):
+            lastSpectrum = payload
+            lastSpectrumAt = Date()
         case .unknown:
             break
         }

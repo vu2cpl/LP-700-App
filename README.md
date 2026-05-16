@@ -30,6 +30,15 @@ readouts on top, status row + keypad beneath.
   large numeric readouts, SWR-tinted (green/yellow/red at 1.5 / 2.0
   thresholds), channel pills (Auto / 1..4), range cycle button, peak
   mode trio (Peak Hold / Average / Tune), alarm pill.
+- **Waveform & Spectrum views** — the meter's other two LCD pages
+  rendered natively. `WaveformView` shows the envelope-scope trace
+  as a mirrored bar plot; `SpectrumView` shows the FFT as a
+  vertical-bar graph (DC bin clipped). Both fed by the server's
+  `scope` / `spectrum` WS frames (~4 Hz while the meter is on the
+  matching page). View dispatch is driven by the LCD Mode button —
+  press once to cycle Power/SWR → Waveform → Spectrum → Power/SWR.
+  A compact power strip stays visible above the trace, and the
+  Controls card (CH / Range) remains reachable from every view.
 - **Control verbs** the server's `/ws` channel accepts:
   `peak_toggle`, `range_step`, `channel_step`, `alarm_toggle`,
   `mode_step`. All gated behind the server's `allow_control` flag.

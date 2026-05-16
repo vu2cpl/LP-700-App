@@ -64,10 +64,16 @@ struct BarConfig: Equatable {
 extension PowerSWRModel {
     /// Builds a model from a snapshot + context flags. Pure function;
     /// safe to call on every `ContentView.body` evaluation.
+    ///
+    /// - Parameter skipAutoChannel: when true, the CH button cycles
+    ///   1 → 2 → 3 → 4 → 1 (no auto). Passed by WaveformView /
+    ///   SpectrumView because the meter's firmware doesn't support
+    ///   auto-channel on those LCD pages.
     static func make(snapshot: Snapshot?,
                      allowControl: Bool,
                      connected: Bool,
-                     setupOpen: Bool) -> PowerSWRModel {
+                     setupOpen: Bool,
+                     skipAutoChannel: Bool = false) -> PowerSWRModel {
         let baseDisabled = !allowControl || !connected || setupOpen
         let autoCh = snapshot?.autoChannel == true
 
@@ -100,8 +106,8 @@ extension PowerSWRModel {
             swrBar: makeSwrBar(swr, tint: swrTint),
             scaleLabel: formatScaleLabel(scale),
             controls: ControlsModel(
-                channelLabel: channelLabel(snapshot),
-                nextChannel: nextChannel(snapshot),
+                channelLabel: channelLabel(snapshot, skipAuto: skipAutoChannel),
+                nextChannel: nextChannel(snapshot, skipAuto: skipAutoChannel),
                 rangeLabel: snapshot?.range ?? "—",
                 peakModeLabel: peakModeLabel(snapshot?.peakMode),
                 nextPeakMode: nextPeakMode(snapshot?.peakMode),
@@ -221,20 +227,26 @@ private func autoScale(_ snap: Snapshot?) -> Double {
     return standards.first(where: { $0 >= peak }) ?? 10000
 }
 
-private func channelLabel(_ s: Snapshot?) -> String {
+private func channelLabel(_ s: Snapshot?, skipAuto: Bool = false) -> String {
     guard let s else { return "—" }
-    // In CH Auto, also surface the channel the meter is currently
-    // decoding so the operator can tell which per-channel settings are
-    // active (matches the hardware LCD's "Auto Ch=1" indicator).
-    return s.autoChannel ? "A → \(s.channel)" : "\(s.channel)"
+    if s.autoChannel {
+        // In CH Auto, surface the channel the meter is decoding for
+        // (matches the hardware LCD's "Auto Ch=1" indicator). In
+        // Waveform / Spectrum views the auto-channel state is
+        // hardware-invalid and the trace placeholder already tells
+        // the operator to switch — drop the "A → " prefix there.
+        return skipAuto ? "\(s.channel)" : "A → \(s.channel)"
+    }
+    return "\(s.channel)"
 }
 
-// Cycle order: Auto → 1 → 2 → 3 → 4 → Auto. Server's `channel_step`
-// verb takes 0 = auto, 1..4 = explicit channel.
-private func nextChannel(_ s: Snapshot?) -> Int {
+// Cycle order: Auto (0) → 1 → 2 → 3 → 4 → Auto. With `skipAuto`,
+// 4 wraps to 1 and Auto jumps straight to 1.
+private func nextChannel(_ s: Snapshot?, skipAuto: Bool = false) -> Int {
     guard let s else { return 1 }
     if s.autoChannel { return 1 }
-    return s.channel >= 4 ? 0 : s.channel + 1
+    if s.channel >= 4 { return skipAuto ? 1 : 0 }
+    return s.channel + 1
 }
 
 private func peakModeLabel(_ m: PeakMode?) -> String {
@@ -246,7 +258,6 @@ private func peakModeLabel(_ m: PeakMode?) -> String {
     }
 }
 
-// Cycle order: Peak Hold (0) → Average (1) → Tune (2) → Peak Hold.
 private func nextPeakMode(_ m: PeakMode?) -> Int {
     switch m {
     case .peakHold: return 1
@@ -494,8 +505,26 @@ private struct PowerBar: View {
 // Reads only Equatable values from the model; closures are constructed
 // fresh by the parent on each re-render but only invoked on user input,
 // so their non-Equatability doesn't cost render work.
-private struct ControlsCard: View {
+//
+// Visible in every top-level view (PowerSWRView, WaveformView,
+// SpectrumView) so the operator can always cycle Channel / Range /
+// Mode / Alarm without backing out of the current LCD page. The
+// underlying meter constraints (e.g. auto-channel disallowed on the
+// Waveform / Spectrum LCD pages) are surfaced as placeholders in the
+// trace area, not by removing the controls.
+struct ControlsCard: View {
+    /// Which set of cycle buttons to show.
+    /// - `.full`: CH / Rng / Mode (peak/avg/tune) / Alm — Power/SWR view.
+    /// - `.sampleMode`: CH / Rng only — Waveform / Spectrum views.
+    ///   The meter's actual F-keys on those LCD pages are Signal Mode
+    ///   (CW/SSB/PSK), Wfm subtype, and User 1/2 — none of which the
+    ///   server currently exposes verbs for. Hide the peak-mode and
+    ///   alarm buttons here because they don't apply on those pages
+    ///   (peak-mode is power-view specific; alarm is per-channel-page).
+    enum Style { case full, sampleMode }
+
     var model: ControlsModel
+    var style: Style = .full
     var onChannelStep: (Int) -> Void
     var onRangeStep: () -> Void
     var onPeakStep: (Int) -> Void
@@ -515,16 +544,18 @@ private struct ControlsCard: View {
                             disabled: model.rangeDisabled) {
                     onRangeStep()
                 }
-                cycleButton(title: "Mode",
-                            value: model.peakModeLabel,
-                            disabled: model.peakDisabled) {
-                    onPeakStep(model.nextPeakMode)
-                }
-                cycleButton(title: "Alm",
-                            value: model.alarmLabel,
-                            disabled: model.alarmDisabled,
-                            valueTint: model.alarmTint) {
-                    onAlarmToggle()
+                if style == .full {
+                    cycleButton(title: "Mode",
+                                value: model.peakModeLabel,
+                                disabled: model.peakDisabled) {
+                        onPeakStep(model.nextPeakMode)
+                    }
+                    cycleButton(title: "Alm",
+                                value: model.alarmLabel,
+                                disabled: model.alarmDisabled,
+                                valueTint: model.alarmTint) {
+                        onAlarmToggle()
+                    }
                 }
             }
             // Always reserve space for the lock note so the card height
