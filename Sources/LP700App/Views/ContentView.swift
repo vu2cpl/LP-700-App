@@ -130,24 +130,33 @@ struct ContentView: View {
         if vm.setupOpen {
             SetupOverlay(vm: vm)
         } else {
-            // Build a value-typed model on each ContentView re-render
-            // (cheap; pure functions over the snapshot). PowerSWRView
-            // is `Equatable` over this model, so SwiftUI's `.equatable()`
-            // skips the entire bargraph + ControlsCard subtree's body
-            // re-evaluation and layout pass when display values are
-            // unchanged frame-over-frame — extremely common at the
-            // 10 Hz publish rate after `formatPower` rounds and the
-            // bar fraction is quantized into 1 % steps.
-            PowerSWRView(
-                model: PowerSWRModel.make(
-                    snapshot: vm.snapshot,
-                    allowControl: vm.allowControl,
-                    connected: vm.connection == .connected,
-                    setupOpen: vm.setupOpen
-                ),
-                vm: vm
-            )
-            .equatable()
+            // View dispatch is driven by `vm.activeView`, which is
+            // purely user-driven (LCD Mode button cycles it). No
+            // autonomous switching from sample-frame arrival or
+            // telemetry top_mode — both are unstable enough that
+            // any auto-detection just flickers the view.
+            switch vm.activeView {
+            case .waveform:
+                WaveformView(vm: vm)
+            case .spectrum:
+                SpectrumView(vm: vm)
+            case .powerSWR:
+                PowerSWRView(
+                    model: PowerSWRModel.make(
+                        snapshot: vm.snapshot,
+                        channel: vm.stableChannel,
+                        autoChannel: vm.stableAutoChannel,
+                        peakMode: vm.stablePeakMode,
+                        alarmEnabled: vm.stableAlarmEnabled,
+                        range: vm.stableRange,
+                        allowControl: vm.allowControl,
+                        connected: vm.connection == .connected,
+                        setupOpen: vm.setupOpen
+                    ),
+                    vm: vm
+                )
+                .equatable()
+            }
         }
     }
 

@@ -64,15 +64,33 @@ struct BarConfig: Equatable {
 extension PowerSWRModel {
     /// Builds a model from a snapshot + context flags. Pure function;
     /// safe to call on every `ContentView.body` evaluation.
+    /// Control state (CH / Rng / Mode / Alm) is pulled from the
+    /// debounced `stable*` values on the VM, not directly from the
+    /// snapshot. Power readings still come from the snapshot every
+    /// frame. The debouncing layer suppresses single-frame jitter
+    /// from mis-decoded telemetry without losing track of real
+    /// meter-side changes.
+    ///
+    /// - Parameter skipAutoChannel: when true, the CH button cycles
+    ///   1 → 2 → 3 → 4 → 1 (no auto). Passed by WaveformView /
+    ///   SpectrumView because auto-channel isn't supported on those
+    ///   pages.
     static func make(snapshot: Snapshot?,
+                     channel: Int,
+                     autoChannel: Bool,
+                     peakMode: PeakMode,
+                     alarmEnabled: Bool,
+                     range: String,
                      allowControl: Bool,
                      connected: Bool,
-                     setupOpen: Bool) -> PowerSWRModel {
+                     setupOpen: Bool,
+                     skipAutoChannel: Bool = false) -> PowerSWRModel {
         let baseDisabled = !allowControl || !connected || setupOpen
-        let autoCh = snapshot?.autoChannel == true
 
-        let scale = fullScaleW(snapshot?.range) ?? autoScale(snapshot)
-        let active = activePower(snapshot)
+        // Bar full-scale follows the stable range (which closely
+        // tracks the meter, with single-frame jitter filtered out).
+        let scale = fullScaleW(range) ?? autoScale(snapshot)
+        let active = activePower(snapshot, mode: peakMode)
         let swr = snapshot?.swr ?? 1.0
         let swrTint = swrTintColor(swr)
 
@@ -92,20 +110,20 @@ extension PowerSWRModel {
             swrBar: makeSwrBar(swr, tint: swrTint),
             scaleLabel: formatScaleLabel(scale),
             controls: ControlsModel(
-                channelLabel: channelLabel(snapshot),
-                nextChannel: nextChannel(snapshot),
-                rangeLabel: snapshot?.range ?? "—",
-                peakModeLabel: peakModeLabel(snapshot?.peakMode),
-                nextPeakMode: nextPeakMode(snapshot?.peakMode),
-                alarmLabel: alarmLabel(snapshot),
-                alarmTint: alarmTint(snapshot),
+                channelLabel: channelLabelStable(channel: channel, autoChannel: autoChannel, skipAuto: skipAutoChannel),
+                nextChannel: nextChannelStable(channel: channel, autoChannel: autoChannel, skipAuto: skipAutoChannel),
+                rangeLabel: range,
+                peakModeLabel: peakModeLabel(peakMode),
+                nextPeakMode: nextPeakMode(peakMode),
+                alarmLabel: alarmLabelFromUser(alarmEnabled),
+                alarmTint: alarmTintFromUser(alarmEnabled),
                 channelDisabled: baseDisabled,
-                rangeDisabled: baseDisabled || autoCh,
+                rangeDisabled: baseDisabled || autoChannel,
                 peakDisabled: baseDisabled,
-                alarmDisabled: baseDisabled || autoCh,
-                rangeNote: autoCh ? perChannelLockNote : nil
+                alarmDisabled: baseDisabled || autoChannel,
+                rangeNote: autoChannel ? perChannelLockNote : nil
             ),
-            statusMessage: snapshot?.statusMessage ?? ""
+            statusMessage: cleanStatusMessage(snapshot?.statusMessage ?? "")
         )
     }
 }
@@ -119,15 +137,54 @@ private func formatScaleLabel(_ w: Double) -> String {
     return String(format: "0 / %g W", w)
 }
 
+/// Defensive filter for the meter's `status_message` slot. The server's
+/// "looks like ASCII" heuristic occasionally lets through a non-status
+/// frame's binary garbage that happens to contain printable bytes
+/// (mis-routed sample-cmd HID responses).
+///
+/// Real LP-700 status messages are English phrases — "Reduce power or
+/// lower range", "TX Match req'd", etc — so they always contain at
+/// least one space, and a multi-letter word. Garbage seen on the wire
+/// (e.g. `?BFILORUY|_bfilorvy|`, an alphabetised char-set leak) has
+/// neither. Require both:
+///   1. at least one ASCII space (0x20) somewhere, AND
+///   2. at least 3 consecutive ASCII letters somewhere.
+private func cleanStatusMessage(_ msg: String) -> String {
+    var hasSpace = false
+    var letterRun = 0
+    var sawWord = false
+    for c in msg {
+        if c == " " { hasSpace = true }
+        if c.isLetter {
+            letterRun += 1
+            if letterRun >= 3 { sawWord = true }
+        } else {
+            letterRun = 0
+        }
+    }
+    return (hasSpace && sawWord) ? msg : ""
+}
+
 // The single big power number on the card. Underlying field + tint +
-// header label are driven by the meter's peak_mode so the operator can
-// tell at a glance which value they're looking at.
-private func activePower(_ snap: Snapshot?) -> (watts: Double?, tint: Color, label: String) {
-    switch snap?.peakMode {
-    case .peakHold: return (snap?.displayedPeakW, .orange, "Peak")
-    case .average:  return (snap?.powerAvgW,      .cyan,   "Average")
-    case .tune:     return (snap?.powerAvgW,      .green,  "Tune")
-    case nil:       return (snap?.powerAvgW,      .accentColor, "Power")
+// header label follow the user's selected peak mode (not the snapshot's
+// peak_mode byte, which can jitter when the server mis-decodes a
+// sample-cmd HID response as telemetry). `Snapshot.displayedPeakW` is
+// itself peak_mode-aware on the wire side, so we re-derive the peak
+// readout here off the user mode to keep the two in lock-step.
+private func activePower(_ snap: Snapshot?, mode: PeakMode) -> (watts: Double?, tint: Color, label: String) {
+    switch mode {
+    case .peakHold:
+        // Mirror Snapshot.displayedPeakW: held peak in peakHold mode,
+        // falling back to live envelope peak when no peak has been
+        // observed yet (peakHoldW == 0).
+        let held = snap?.peakHoldW ?? 0
+        let live = snap?.powerPeakW ?? 0
+        let watts = held > 0 ? held : live
+        return (watts, .orange, "Peak")
+    case .average:
+        return (snap?.powerAvgW, .cyan, "Average")
+    case .tune:
+        return (snap?.powerAvgW, .green, "Tune")
     }
 }
 
@@ -224,53 +281,52 @@ private func autoScale(_ snap: Snapshot?) -> Double {
     return standards.first(where: { $0 >= peak }) ?? 10000
 }
 
-private func channelLabel(_ s: Snapshot?) -> String {
-    guard let s else { return "—" }
-    // In CH Auto, also surface the channel the meter is currently
-    // decoding so the operator can tell which per-channel settings are
-    // active (matches the hardware LCD's "Auto Ch=1" indicator).
-    return s.autoChannel ? "A → \(s.channel)" : "\(s.channel)"
+// Stable-state versions of the label / cycle helpers. Read the
+// debounced `stableChannel` / `stableAutoChannel` from the VM —
+// snapshot is not touched here so the labels don't flicker.
+
+private func channelLabelStable(channel: Int, autoChannel: Bool, skipAuto: Bool) -> String {
+    if autoChannel {
+        // CH Auto. Power/SWR view shows "A → N" (active channel the
+        // meter is decoding); Waveform / Spectrum (skipAuto) drop
+        // the "A" indicator because the placeholder in the trace
+        // area already tells the operator to pick CH 1–4.
+        return skipAuto ? "\(channel)" : "A → \(channel)"
+    }
+    return "\(channel)"
 }
 
-// Cycle order: Auto → 1 → 2 → 3 → 4 → Auto. Server's `channel_step`
-// verb takes 0 = auto, 1..4 = explicit channel.
-private func nextChannel(_ s: Snapshot?) -> Int {
-    guard let s else { return 1 }
-    if s.autoChannel { return 1 }
-    return s.channel >= 4 ? 0 : s.channel + 1
+// Cycle order: normally Auto (0) → 1 → 2 → 3 → 4 → Auto. With
+// `skipAuto`, wrap 4 → 1 and from Auto jump straight to 1.
+private func nextChannelStable(channel: Int, autoChannel: Bool, skipAuto: Bool) -> Int {
+    if autoChannel { return 1 }
+    if channel >= 4 { return skipAuto ? 1 : 0 }
+    return channel + 1
 }
 
-private func peakModeLabel(_ m: PeakMode?) -> String {
+private func peakModeLabel(_ m: PeakMode) -> String {
     switch m {
     case .peakHold: return "Hold"
     case .average:  return "Avg"
     case .tune:     return "Tune"
-    case nil:       return "—"
     }
 }
 
 // Cycle order: Peak Hold (0) → Average (1) → Tune (2) → Peak Hold.
-private func nextPeakMode(_ m: PeakMode?) -> Int {
+private func nextPeakMode(_ m: PeakMode) -> Int {
     switch m {
     case .peakHold: return 1
     case .average:  return 2
     case .tune:     return 0
-    case nil:       return 1
     }
 }
 
-private func alarmLabel(_ s: Snapshot?) -> String {
-    guard let s else { return "—" }
-    if !s.alarmEnabled { return "Off" }
-    if s.alarmTripped  { return "TRIP" }
-    return "On"
+private func alarmLabelFromUser(_ on: Bool) -> String {
+    on ? "On" : "Off"
 }
 
-private func alarmTint(_ s: Snapshot?) -> Color? {
-    guard let s else { return nil }
-    if !s.alarmEnabled { return nil }
-    if s.alarmTripped  { return .red }
-    return .green
+private func alarmTintFromUser(_ on: Bool) -> Color? {
+    on ? .green : nil
 }
 
 // MARK: - View
@@ -497,8 +553,26 @@ private struct PowerBar: View {
 // Reads only Equatable values from the model; closures are constructed
 // fresh by the parent on each re-render but only invoked on user input,
 // so their non-Equatability doesn't cost render work.
-private struct ControlsCard: View {
+//
+// Visible in every top-level view (PowerSWRView, WaveformView,
+// SpectrumView) so the operator can always cycle Channel / Range /
+// Mode / Alarm without backing out of the current LCD page. The
+// underlying meter constraints (e.g. auto-channel disallowed on the
+// Waveform / Spectrum LCD pages) are surfaced as placeholders in the
+// trace area, not by removing the controls.
+struct ControlsCard: View {
+    /// Which set of cycle buttons to show.
+    /// - `.full`: CH / Rng / Mode (peak/avg/tune) / Alm — Power/SWR view.
+    /// - `.sampleMode`: CH / Rng only — Waveform / Spectrum views.
+    ///   The meter's actual F-keys on those LCD pages are Signal Mode
+    ///   (CW/SSB/PSK), Wfm subtype, and User 1/2 — none of which the
+    ///   server currently exposes verbs for. Hide the peak-mode and
+    ///   alarm buttons here because they don't apply on those pages
+    ///   (peak-mode is power-view specific; alarm is per-channel-page).
+    enum Style { case full, sampleMode }
+
     var model: ControlsModel
+    var style: Style = .full
     var onChannelStep: (Int) -> Void
     var onRangeStep: () -> Void
     var onPeakStep: (Int) -> Void
@@ -518,16 +592,18 @@ private struct ControlsCard: View {
                             disabled: model.rangeDisabled) {
                     onRangeStep()
                 }
-                cycleButton(title: "Mode",
-                            value: model.peakModeLabel,
-                            disabled: model.peakDisabled) {
-                    onPeakStep(model.nextPeakMode)
-                }
-                cycleButton(title: "Alm",
-                            value: model.alarmLabel,
-                            disabled: model.alarmDisabled,
-                            valueTint: model.alarmTint) {
-                    onAlarmToggle()
+                if style == .full {
+                    cycleButton(title: "Mode",
+                                value: model.peakModeLabel,
+                                disabled: model.peakDisabled) {
+                        onPeakStep(model.nextPeakMode)
+                    }
+                    cycleButton(title: "Alm",
+                                value: model.alarmLabel,
+                                disabled: model.alarmDisabled,
+                                valueTint: model.alarmTint) {
+                        onAlarmToggle()
+                    }
                 }
             }
             // Always reserve space for the lock note so the card height
