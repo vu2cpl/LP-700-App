@@ -57,32 +57,19 @@ final class MeterViewModel: ObservableObject {
     enum ActiveView: Equatable { case powerSWR, waveform, spectrum }
     @Published var activeView: ActiveView = .powerSWR
 
-    // Debounced control state. Each field updates only when TWO
-    // consecutive sane telemetry frames agree on a new value, so a
-    // single mis-decoded frame can't flip the displayed label. User
-    // button presses optimistically update the matching stable*
-    // value immediately for instant feedback; the debouncer then
-    // reconciles against subsequent telemetry. After connect, the
-    // first sane frame seeds all of them at once.
-    @Published var stableChannel: Int = 1          // 1..4 (when not auto)
-    @Published var stableAutoChannel: Bool = false
-    @Published var stablePeakMode: PeakMode = .peakHold
-    @Published var stableAlarmEnabled: Bool = false
-    @Published var stableRange: String = "auto"
-    private var stableStateInitialised = false
+    // One-shot: on first telemetry frame after connect, copy
+    // `top_mode` into activeView so the app lands on whatever LCD
+    // page the meter is showing. After that, user button taps drive
+    // activeView and we don't follow the wire.
+    private var initialActiveViewSet = false
 
-    // Pending values + run-count, per debounced field.
-    private var pendingChannel: Int? = nil
-    private var pendingChannelCount = 0
-    private var pendingAutoChannel: Bool? = nil
-    private var pendingAutoChannelCount = 0
-    private var pendingPeakMode: PeakMode? = nil
-    private var pendingPeakModeCount = 0
-    private var pendingAlarmEnabled: Bool? = nil
-    private var pendingAlarmEnabledCount = 0
-    private var pendingRange: String? = nil
-    private var pendingRangeCount = 0
-    private static let debounceThreshold = 2        // 2 consecutive matching frames
+    // (Control state — channel / peak_mode / alarm / range — was
+    // briefly tracked in dedicated debounced @Published fields as a
+    // workaround for a server-side bug that decoded sample-cmd HID
+    // responses as telemetry, producing flapping snapshot fields.
+    // The server is now fixed [LP-700-Server PR #2], so the snapshot
+    // is the trustworthy source of truth again. Views read
+    // `vm.snapshot?.channel` etc. directly.)
 
     // Alarm-trip notification edge tracking
     private var lastAlarmTripped: Bool = false
@@ -157,12 +144,7 @@ final class MeterViewModel: ObservableObject {
         lastScopeAt = .distantPast
         lastSpectrumAt = .distantPast
         activeView = .powerSWR
-        stableStateInitialised = false
-        pendingChannel = nil; pendingChannelCount = 0
-        pendingAutoChannel = nil; pendingAutoChannelCount = 0
-        pendingPeakMode = nil; pendingPeakModeCount = 0
-        pendingAlarmEnabled = nil; pendingAlarmEnabledCount = 0
-        pendingRange = nil; pendingRangeCount = 0
+        initialActiveViewSet = false
     }
 
     func stop() async {
@@ -199,53 +181,38 @@ final class MeterViewModel: ObservableObject {
 
     // MARK: - Commands
     //
-    // Each control verb does an **optimistic** update on the matching
-    // stable* @Published so the UI gives instant feedback, then sends
-    // the command. Subsequent telemetry runs through the debouncer
-    // and either confirms (no further visible change) or — if the
-    // meter ended up at a different value — reconciles after two
-    // consecutive frames agree.
+    // Each verb just sends to the meter; the next telemetry frame
+    // reflects the new state in the @Published `snapshot`. Server is
+    // now reliable so we don't need the optimistic-update layer the
+    // older WIP carried.
 
     /// Cycle the meter range one step. Server's `range_step` verb
-    /// ignores the value, so we advance our local range cycle
-    /// optimistically; the debounced `stableRange` reconciles when
-    /// the next telemetry frame lands.
+    /// ignores the value parameter (firmware always advances by one);
+    /// we compute the local index from the current snapshot so
+    /// re-pressing converges even if the meter and app momentarily
+    /// disagree.
     func sendRangeStep() {
         let cycle = RangeNames.cycle
-        let idx = cycle.firstIndex(of: stableRange) ?? 0
+        let current = snapshot?.range ?? "auto"
+        let idx = cycle.firstIndex(of: current) ?? 0
         let next = (idx + 1) % cycle.count
-        stableRange = cycle[next]
         sendCommand(.rangeStep, value: next)
     }
 
     /// Set the meter channel: 0 = auto, 1..4 = explicit channel.
     func sendChannelStep(_ value: Int) {
-        if value == 0 {
-            stableAutoChannel = true
-            // Keep current stableChannel (the active slot) until the
-            // meter tells us which channel it auto-selected.
-        } else if (1...4).contains(value) {
-            stableAutoChannel = false
-            stableChannel = value
-        }
         sendCommand(.channelStep, value: value)
     }
 
     /// Force the meter into one of peak_hold (0), average (1), tune (2).
     func sendPeakToggle(_ value: Int) {
-        switch value {
-        case 0: stablePeakMode = .peakHold
-        case 1: stablePeakMode = .average
-        case 2: stablePeakMode = .tune
-        default: break
-        }
         sendCommand(.peakToggle, value: value)
     }
 
-    /// Toggle the alarm: off ↔ on.
+    /// Toggle the alarm: off ↔ on. Reads current state from snapshot.
     func sendAlarmToggle() {
-        stableAlarmEnabled.toggle()
-        sendCommand(.alarmToggle, value: stableAlarmEnabled ? 1 : 0)
+        let next = (snapshot?.alarmEnabled == true) ? 0 : 1
+        sendCommand(.alarmToggle, value: next)
     }
 
     /// Cycle the meter's top-level LCD mode. The app's visible cycle
@@ -316,30 +283,22 @@ final class MeterViewModel: ObservableObject {
     private func applyFrame(_ frame: ServerFrame) {
         switch frame {
         case .telemetry(_, _, let data):
-            // Defensive: server sometimes decodes non-cmd-'0' HID
-            // responses as telemetry frames. Those carry garbage
-            // values at the same byte offsets (we've seen SWR 20.52
-            // and peak < avg from this). Drop the obviously bad ones
-            // rather than letting them flicker the display.
-            guard isSane(data) else {
-                log.debug("dropping insane telemetry: swr=\(data.swr) avg=\(data.powerAvgW) peak=\(data.powerPeakW)")
-                return
-            }
-            // First sane snapshot after connect seeds the stable*
-            // values directly (so the labels start in sync); after
-            // that, run each control field through the 2-frame
-            // debouncer to filter single-frame jitter.
-            if !stableStateInitialised {
-                seedStableState(from: data)
-                stableStateInitialised = true
-            } else {
-                debounceStableState(from: data)
-            }
             // Alarm-edge detection runs on every frame so notifications
             // are timely; the @Published snapshot is coalesced to 5 Hz
             // to bound SwiftUI re-render cost.
             handleAlarmEdge(data: data)
             schedulePublish(data)
+            // Initial activeView seed: on the first telemetry frame
+            // after connect, follow the meter's top_mode. After that,
+            // activeView is purely user-driven via sendModeStep.
+            if !initialActiveViewSet {
+                initialActiveViewSet = true
+                switch data.topMode {
+                case .powerSWR, .setup: activeView = .powerSWR
+                case .waveform:         activeView = .waveform
+                case .spectrum:         activeView = .spectrum
+                }
+            }
         case .heartbeat:
             break
         case .status(let level, let msg):
@@ -398,106 +357,6 @@ final class MeterViewModel: ObservableObject {
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             await MainActor.run { self?.statusBanner = nil }
         }
-    }
-
-    // MARK: - User state seeding
-
-    /// First-time seed: copy each meter-reported control field
-    /// straight into the stable* @Published value. After this, the
-    /// debouncer takes over.
-    private func seedStableState(from data: Snapshot) {
-        stableChannel = data.channel == 0 ? 1 : data.channel
-        stableAutoChannel = data.autoChannel
-        stablePeakMode = data.peakMode
-        stableAlarmEnabled = data.alarmEnabled
-        if RangeNames.cycle.contains(data.range) {
-            stableRange = data.range
-        }
-        // Seed the view too, so the app starts on whatever LCD page
-        // the meter is showing. The meter's own setup page maps to
-        // our Power/SWR view (we don't mirror the meter's setup
-        // screen in-app — the operator navigates that on the meter's
-        // front panel).
-        switch data.topMode {
-        case .powerSWR, .setup: activeView = .powerSWR
-        case .waveform:         activeView = .waveform
-        case .spectrum:         activeView = .spectrum
-        }
-    }
-
-    /// Per-frame debounce: only commit a new value to a `stable*`
-    /// field after `debounceThreshold` consecutive matching telemetry
-    /// frames. One-off junk frames (e.g. from mis-decoded sample-cmd
-    /// HID responses) get suppressed; real changes — whether
-    /// initiated by the app or by the meter's front panel — propagate
-    /// after ~200–400 ms (2 frames at the 5 Hz publish rate).
-    private func debounceStableState(from data: Snapshot) {
-        debounceField(current: stableChannel, incoming: data.channel,
-                      pending: &pendingChannel, count: &pendingChannelCount) {
-            self.stableChannel = $0
-        }
-        debounceField(current: stableAutoChannel, incoming: data.autoChannel,
-                      pending: &pendingAutoChannel, count: &pendingAutoChannelCount) {
-            self.stableAutoChannel = $0
-        }
-        debounceField(current: stablePeakMode, incoming: data.peakMode,
-                      pending: &pendingPeakMode, count: &pendingPeakModeCount) {
-            self.stablePeakMode = $0
-        }
-        debounceField(current: stableAlarmEnabled, incoming: data.alarmEnabled,
-                      pending: &pendingAlarmEnabled, count: &pendingAlarmEnabledCount) {
-            self.stableAlarmEnabled = $0
-        }
-        // Range is a string; only debounce if it's one we recognise
-        // (drops outright garbage that the server's decoder somehow
-        // let through).
-        if RangeNames.cycle.contains(data.range) {
-            debounceField(current: stableRange, incoming: data.range,
-                          pending: &pendingRange, count: &pendingRangeCount) {
-                self.stableRange = $0
-            }
-        }
-    }
-
-    private func debounceField<T: Equatable>(
-        current: T,
-        incoming: T,
-        pending: inout T?,
-        count: inout Int,
-        commit: (T) -> Void
-    ) {
-        if incoming == current {
-            // Match — clear any pending change.
-            pending = nil
-            count = 0
-            return
-        }
-        if pending == incoming {
-            count += 1
-            if count >= Self.debounceThreshold {
-                commit(incoming)
-                pending = nil
-                count = 0
-            }
-        } else {
-            pending = incoming
-            count = 1
-        }
-    }
-
-    /// Defensive sanity check on inbound telemetry. The server
-    /// occasionally decodes non-cmd-'0' HID responses as telemetry
-    /// frames (mis-routed sample-cmd responses); those carry junk
-    /// values at the SWR / power offsets. Drop frames that violate
-    /// physical invariants so they don't pollute the readouts.
-    private func isSane(_ s: Snapshot) -> Bool {
-        if s.swr < 1.0 || s.swr > 10.0 { return false }
-        if s.powerAvgW.isNaN || s.powerPeakW.isNaN { return false }
-        if s.powerAvgW < 0 || s.powerPeakW < 0 { return false }
-        // Peak < Avg is physically impossible. Allow 0.5 W slop for
-        // rounding on the wire.
-        if s.powerPeakW + 0.5 < s.powerAvgW { return false }
-        return true
     }
 
     private func handleAlarmEdge(data: Snapshot) {

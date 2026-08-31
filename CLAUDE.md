@@ -229,6 +229,36 @@ checkbox to keep the new tag out of "latest".
   height: 580)`. `.windowResizability(.contentMinSize)` so the user
   can grow the window past the content floor but never shrink it
   below the readable minimum.
+- **Scope (Waveform) and Spectrum views.** Server v0.1.6+ emits two
+  new WS frame types — `scope` and `spectrum` — each carrying a 320-
+  element `[UInt8]` buffer at ~4 Hz while the meter is on the matching
+  LCD page. `MeterViewModel.lastScope` / `lastSpectrum` cache the most
+  recent payload; `WaveformView` and `SpectrumView` render the buffers
+  via SwiftUI `Canvas` (mirrored mid-line plot in cyan for waveform;
+  vertical-bar FFT in green for spectrum, with the DC bin clipped to
+  the rest-99th-percentile so it doesn't squash dynamic range).
+  `PowerStrip` shows the live numerics above the trace because sample
+  values are display-normalised (0..255), not absolute watts.
+- **View dispatch is purely user-driven.** `MeterViewModel.activeView`
+  is an enum (`powerSWR` / `waveform` / `spectrum`) cycled by
+  `sendModeStep()` and seeded one-shot on the first telemetry frame
+  after connect (so the app lands on whatever LCD page the meter is
+  showing). No auto-switching on sample-frame arrival or telemetry
+  `top_mode` jitter. The meter's full 4-step cycle includes a Setup
+  page that we don't mirror in-app, so the wrap from Spectrum → Power/SWR
+  sends **two** `mode_step` commands to skip past the meter's setup
+  page in lock-step.
+- **Auto-channel is hardware-invalid on the Waveform / Spectrum LCD
+  pages.** The LP-500/700 firmware doesn't decode sample buffers
+  cleanly when `auto_channel == true`. Server-side gates emission on
+  `channel ∈ {1..4}`; client-side, both views show a placeholder
+  ("Switch to CH 1–4 below") in the trace area when `autoChannel` is
+  active, while still rendering the `ControlsCard` + `PowerStrip` so
+  the operator can switch channels without backing out. The
+  `ControlsCard.Style` enum (`.full` / `.sampleMode`) drops the
+  peak-mode + alarm buttons in the sample views (they aren't the F-keys
+  the meter shows on those pages — see the wfm-spec-fkeys handover on
+  the server fork for the future expansion).
 
 ## Sources / links
 

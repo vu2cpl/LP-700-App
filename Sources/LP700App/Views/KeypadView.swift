@@ -8,22 +8,19 @@ struct KeypadView: View {
 
     var body: some View {
         let disabled = !vm.allowControl || vm.connection != .connected || vm.setupOpen
-        // Gating reads the debounced stable* state, so the keypad
-        // stays in lock-step with the ControlsCard inside the
-        // active view (both read the same source of truth).
-        let autoCh = vm.stableAutoChannel
+        let autoCh = vm.snapshot?.autoChannel == true
 
         HStack(spacing: 10) {
             keyButton(title: "Range",
                       systemImage: "arrow.triangle.2.circlepath",
-                      subtitle: autoCh ? "Locked (auto-CH)" : vm.stableRange,
+                      subtitle: autoCh ? "Locked (auto-CH)" : (vm.snapshot?.range ?? "—"),
                       action: { vm.sendRangeStep() })
                 .keyboardShortcut("r", modifiers: [.command])
                 .disabled(autoCh)
 
             keyButton(title: "Alarm",
                       systemImage: alarmIcon,
-                      subtitle: autoCh ? "Locked (auto-CH)" : (vm.stableAlarmEnabled ? "Armed" : "Disabled"),
+                      subtitle: autoCh ? "Locked (auto-CH)" : alarmSubtitle,
                       action: { vm.sendAlarmToggle() })
                 .keyboardShortcut("a", modifiers: [.command])
                 .disabled(autoCh)
@@ -52,7 +49,17 @@ struct KeypadView: View {
     }
 
     private var alarmIcon: String {
-        vm.stableAlarmEnabled ? "bell.fill" : "bell.slash"
+        switch vm.snapshot?.alarmEnabled {
+        case true: return "bell.fill"
+        case false: return "bell.slash"
+        default: return "bell"
+        }
+    }
+
+    private var alarmSubtitle: String {
+        guard let s = vm.snapshot else { return "—" }
+        if s.alarmTripped { return "Tripped" }
+        return s.alarmEnabled ? "Armed" : "Disabled"
     }
 
     private var lcdModeSubtitle: String {

@@ -22,11 +22,6 @@ struct WaveformView: View {
         // factory drives every view's CH / Rng / Mode / Alm state.
         let controls = PowerSWRModel.make(
             snapshot: vm.snapshot,
-            channel: vm.stableChannel,
-            autoChannel: vm.stableAutoChannel,
-            peakMode: vm.stablePeakMode,
-            alarmEnabled: vm.stableAlarmEnabled,
-            range: vm.stableRange,
             allowControl: vm.allowControl,
             connected: vm.connection == .connected,
             setupOpen: vm.setupOpen,
@@ -54,7 +49,7 @@ struct WaveformView: View {
                 // garbage. Refuse to render the trace and prompt the
                 // operator to switch to a manual channel — the CH
                 // cycle button is right below.
-                if vm.stableAutoChannel {
+                if vm.snapshot?.autoChannel == true {
                     PlaceholderText("Switch to CH 1–4 below. Auto-channel isn't supported on the Waveform LCD page.")
                 } else if let scope = vm.lastScope, isFresh(vm.lastScopeAt) {
                     Canvas { ctx, size in

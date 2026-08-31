@@ -144,11 +144,6 @@ struct ContentView: View {
                 PowerSWRView(
                     model: PowerSWRModel.make(
                         snapshot: vm.snapshot,
-                        channel: vm.stableChannel,
-                        autoChannel: vm.stableAutoChannel,
-                        peakMode: vm.stablePeakMode,
-                        alarmEnabled: vm.stableAlarmEnabled,
-                        range: vm.stableRange,
                         allowControl: vm.allowControl,
                         connected: vm.connection == .connected,
                         setupOpen: vm.setupOpen

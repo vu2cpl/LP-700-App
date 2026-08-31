@@ -20,11 +20,6 @@ struct SpectrumView: View {
     var body: some View {
         let controls = PowerSWRModel.make(
             snapshot: vm.snapshot,
-            channel: vm.stableChannel,
-            autoChannel: vm.stableAutoChannel,
-            peakMode: vm.stablePeakMode,
-            alarmEnabled: vm.stableAlarmEnabled,
-            range: vm.stableRange,
             allowControl: vm.allowControl,
             connected: vm.connection == .connected,
             setupOpen: vm.setupOpen,
@@ -47,7 +42,7 @@ struct SpectrumView: View {
                 // a trace that's known to be indeterminate — but keep
                 // the controls visible so the operator can switch CH
                 // without backing out of the page.
-                if vm.stableAutoChannel {
+                if vm.snapshot?.autoChannel == true {
                     PlaceholderText("Switch to CH 1–4 below. Auto-channel isn't supported on the Spectrum LCD page.")
                 } else if let spec = vm.lastSpectrum, isFresh(vm.lastSpectrumAt) {
                     Canvas { ctx, size in
