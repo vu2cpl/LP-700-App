@@ -9,3 +9,6 @@ dist/
 *.dmg
 xcuserdata/
 *.xcworkspace
+
+# vendor manual kept locally for reference, not redistributed
+LP-500-User_Guide.pdf
