@@ -29,7 +29,9 @@ struct KeypadView: View {
                 .keyboardShortcut("a", modifiers: [.command])
                 .disabled(!keys.alarm)
 
-            keyButton(title: "LCD Mode",
+            // "Mode", not "LCD Mode": the longer title didn't fit the button
+            // at the usual window width. The subtitle names the LCD page.
+            keyButton(title: "Mode",
                       systemImage: "rectangle.3.offgrid",
                       subtitle: lcdModeSubtitle,
                       action: { vm.sendModeStep() })
@@ -76,28 +78,40 @@ struct KeypadView: View {
         }
     }
 
-    // Four buttons share the row, so at the default window width each has
-    // only about 55 pt for its text. "LCD Mode" (55.3 pt at 11 pt medium)
-    // and "Power/SWR only" (71.4 pt at 9 pt) were cut off. The tighter
-    // icon and padding give the text about 7 pt more, and both lines
-    // shrink to 80 % before they truncate. The button's own size never
-    // changes, so the row stays put across pages.
+    private static let titleFont = Font.system(size: 11, weight: .medium)
+    private static let subtitleFont = Font.system(size: 9)
+
+    // Four buttons share the row, so at the usual window width each has
+    // only about 55 pt for its text, and about 40 pt at the minimum width.
+    // The tight icon and padding leave the text as much room as they can,
+    // and a line that is still too long shrinks to 80 % before it
+    // truncates. The hidden pair of full-size lines holds every button at
+    // the same height whatever its text, so a shrunken line can't make
+    // one button, or the whole row, shorter on some page.
     private func keyButton(title: String, systemImage: String, subtitle: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 4) {
                 Image(systemName: systemImage)
                     .font(.system(size: 11))
                     .frame(width: 12)
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(title)
-                        .font(.system(size: 11, weight: .medium))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                    Text(subtitle)
-                        .font(.system(size: 9))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
+                ZStack(alignment: .leading) {
+                    VStack(spacing: 0) {
+                        Text("Ag").font(Self.titleFont)
+                        Text("Ag").font(Self.subtitleFont)
+                    }
+                    .hidden()
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(title)
+                            .font(Self.titleFont)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                        Text(subtitle)
+                            .font(Self.subtitleFont)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
             }

@@ -556,18 +556,26 @@ struct ControlsCard: View {
 
     private func cycleButton(title: String, value: String, disabled: Bool, valueTint: Color? = nil, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(title)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .fixedSize()
-                Text(value)
+            // The hidden full-size line keeps every button at the same
+            // height when a long value ("250W" at the minimum window width)
+            // shrinks, so the row never changes height between pages.
+            ZStack {
+                Text("0")
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundColor(disabled ? .secondary : (valueTint ?? .accentColor))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
+                    .hidden()
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(title)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .fixedSize()
+                    Text(value)
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundColor(disabled ? .secondary : (valueTint ?? .accentColor))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.horizontal, 8)

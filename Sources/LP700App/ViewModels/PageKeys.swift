@@ -69,7 +69,7 @@ struct PageKeys: Equatable {
         switch lock {
         case .chAuto: return "Range and Alarm can't be changed in CH Auto. Pick CH 1–4."
         case .samplePage: return "Rng, Mode and Alm work on the Power/SWR page only."
-        case .setupPage: return "In Setup the meter's keys change settings. LCD Mode goes back."
+        case .setupPage: return "In Setup the meter's keys change settings. Mode (below) goes back."
         case nil: return nil
         }
     }
