@@ -40,14 +40,14 @@ page; a key the page doesn't use is greyed out in its slot, not hidden.
   vertical-bar graph (DC bin clipped). Both fed by the server's
   `scope` / `spectrum` WS frames (~4 Hz while the meter is on the
   matching page). The app shows whichever page the meter is on;
-  the LCD Mode button presses the meter's Mode key (Power/SWR →
+  the keypad's Mode button presses the meter's Mode key (Power/SWR →
   Waveform → Spectrum → Power/SWR). On these pages CH picks the
   page's own CH 1–4 (the meter offers no Auto there). Needs a server
   with LP-700-Server PR #9. A compact power strip stays visible above
   the trace. Only CH works on these pages: there the meter's Range,
   Alarm and Peak keys set V/div, sweep, span and so on, which the
   server doesn't report yet, so the app greys them out (set them on the
-  meter). In Setup only LCD Mode works. The waveform trace rides
+  meter). In Setup only Mode works. The waveform trace rides
   through the meter's capture glitches: an empty or torn frame keeps
   the last clean trace for up to a second.
 - **Control verbs** the server's `/ws` channel accepts:

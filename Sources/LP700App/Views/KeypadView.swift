@@ -30,10 +30,11 @@ struct KeypadView: View {
                 .disabled(!keys.alarm)
 
             // "Mode", not "LCD Mode": the longer title didn't fit the button
-            // at the usual window width. The subtitle names the LCD page.
+            // at the usual window width. No subtitle: the status row's Top
+            // field right above already names the LCD page (Manoj, 2026-11-19).
             keyButton(title: "Mode",
                       systemImage: "rectangle.3.offgrid",
-                      subtitle: lcdModeSubtitle,
+                      subtitle: nil,
                       action: { vm.sendModeStep() })
                 .keyboardShortcut("m", modifiers: [.command])
 
@@ -68,16 +69,6 @@ struct KeypadView: View {
         return s.alarmEnabled ? "Armed" : "Disabled"
     }
 
-    private var lcdModeSubtitle: String {
-        switch vm.snapshot?.topMode {
-        case .powerSWR: return "Power / SWR"
-        case .waveform: return "Waveform"
-        case .spectrum: return "Spectrum"
-        case .setup: return "Setup"
-        case nil: return "—"
-        }
-    }
-
     private static let titleFont = Font.system(size: 11, weight: .medium)
     private static let subtitleFont = Font.system(size: 9)
 
@@ -85,35 +76,46 @@ struct KeypadView: View {
     // only about 55 pt for its text, and about 40 pt at the minimum width.
     // The tight icon and padding leave the text as much room as they can,
     // and a line that is still too long shrinks to 80 % before it
-    // truncates. The hidden pair of full-size lines holds every button at
-    // the same height whatever its text, so a shrunken line can't make
-    // one button, or the whole row, shorter on some page.
-    private func keyButton(title: String, systemImage: String, subtitle: String, action: @escaping () -> Void) -> some View {
+    // truncates.
+    //
+    // The hidden pair of full-size lines sets every button's height, and
+    // the visible label is laid over it, so no label can make one button,
+    // or the whole row, taller or shorter on some page. A button with no
+    // subtitle (Mode) uses both lines' room for its title: the title
+    // starts large and shrinks to the biggest size that fits the button's
+    // height and width (Manoj, 2026-11-19: "as big as button allows").
+    private func keyButton(title: String, systemImage: String, subtitle: String?, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 4) {
                 Image(systemName: systemImage)
                     .font(.system(size: 11))
                     .frame(width: 12)
-                ZStack(alignment: .leading) {
-                    VStack(spacing: 0) {
-                        Text("Ag").font(Self.titleFont)
-                        Text("Ag").font(Self.subtitleFont)
-                    }
-                    .hidden()
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(title)
-                            .font(Self.titleFont)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.8)
-                        Text(subtitle)
-                            .font(Self.subtitleFont)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.8)
-                    }
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(spacing: 0) {
+                    Text("Ag").font(Self.titleFont)
+                    Text("Ag").font(Self.subtitleFont)
                 }
-                Spacer(minLength: 0)
+                .hidden()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(alignment: .leading) {
+                    if let subtitle {
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(title)
+                                .font(Self.titleFont)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                            Text(subtitle)
+                                .font(Self.subtitleFont)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                        }
+                    } else {
+                        Text(title)
+                            .font(.system(size: 40, weight: .medium))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.1)
+                    }
+                }
             }
             .padding(.vertical, 2)
             .padding(.horizontal, 2)

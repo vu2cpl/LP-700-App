@@ -224,7 +224,7 @@ Specifics worth calling out:
   `Equatable` so the layout engine can short-circuit body
   re-evaluation (see [§ 2.1](#21-telemetry-coalescing-and-render-budgets)).
 - `KeypadView` is the inline keypad row inside the bottom
-  `CompactPanel`: Range step, Alarm toggle, LCD Mode step, Resync.
+  `CompactPanel`: Range step, Alarm toggle, Mode (LCD page) step, Resync.
   Disabled when `!allowControl || connection != .connected || setupOpen`.
   Range and Alarm additionally grey out when `auto_channel == true`,
   here and in `ControlsCard` (the LP-500 user guide says neither can
@@ -233,7 +233,7 @@ Specifics worth calling out:
   older servers forward them, so the app gate stays the primary guard.
   The gate is per page too (`PageKeys`, 2026-11-19): on Waveform / Spectrum the
   meter's F3–F5 set V/div, sweep, span and so on, so only CH is live
-  there, and in Setup only LCD Mode is. The card, keypad, Meter menu
+  there, and in Setup only Mode is. The card, keypad, Meter menu
   and the view model's send guards all read the same `vm.keys`.
 - `SetupOverlay` is rendered into the same panel area when
   `vm.setupOpen` is true, replacing `PowerSWRView`. Same compositional

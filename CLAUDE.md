@@ -67,7 +67,7 @@ LP-700-App/
 │   ├── Views/
 │   │   ├── ContentView.swift           # toolbar + page area + pinned ControlsCard + bottom CompactPanel (status + keypad)
 │   │   ├── PowerSWRView.swift          # PowerSWRCombinedCard (mode-driven big readout + Avg/Pk/Ref + 3 graduated bars) + ControlsCard type
-│   │   ├── KeypadView.swift            # inline keypad row (Range / Alarm / LCD Mode / Resync)
+│   │   ├── KeypadView.swift            # inline keypad row (Range / Alarm / Mode / Resync)
 │   │   ├── WaveformView.swift          # scope trace (Canvas) for the meter's Waveform page
 │   │   ├── SpectrumView.swift          # FFT bars (Canvas) for the meter's Spectrum page
 │   │   ├── SampleViewShared.swift      # PowerStrip + PlaceholderText shared by the two views above
@@ -237,7 +237,12 @@ it. The in-process `LP700Plugin.manifest` version is not used by the Suite.
   CLAUDE.md): before calling UI work done, switch through every page
   and check the shared buttons don't move. Until 0a20fe0 each page
   embedded its own card (the sample pages a 2-button one), so the card
-  and keypad jumped on every page change.
+  and keypad jumped on every page change. Labels shrink to fit narrow
+  windows, but a hidden full-size line in each button sets its height,
+  so a long or missing label can't make a button or the row taller or
+  shorter on some page. The keypad's page key is titled "Mode" with no
+  subtitle (the status row's Top field names the page), and its title
+  scales to the largest size the button allows (Manoj, 2026-11-19).
 - **Every key is gated by the meter's page (`PageKeys`).** Each app
   control is a raw key press (Mode = F1, CH = F2, Range = F3,
   Alarm = F4, Peak/Avg/Tune = F5), and the meter gives F2–F5 another
@@ -246,7 +251,7 @@ it. The in-process `LP700Plugin.manifest` version is not used by the Suite.
   Adj Up (F2 picks the channel being adjusted). A Range press on the
   Waveform page changed V/div on the bench (2026-11-19), and in Setup
   Alarm or Peak/Avg/Tune could change a setting such as the coupler type. So `PageKeys.make(snapshot)`
-  allows CH only on Waveform/Spectrum, nothing but LCD Mode in Setup,
+  allows CH only on Waveform/Spectrum, nothing but Mode (F1) in Setup,
   and everything but Range/Alarm in CH Auto. The Controls card, the
   keypad, the Meter menu and the `MeterViewModel.send…` guards all read
   `vm.keys`, so no path can press a key the page doesn't allow.
@@ -303,7 +308,7 @@ it. The in-process `LP700Plugin.manifest` version is not used by the Suite.
 - **The view follows the meter's LCD page.** `MeterViewModel.activeView`
   (`powerSWR` / `waveform` / `spectrum`) is set from `top_mode` on every
   telemetry frame (`MeterViewModel.activeView(for:)`; Setup shows
-  Power/SWR). The LCD Mode button only presses the meter's Mode key once
+  Power/SWR). The keypad's Mode button only presses the meter's Mode key once
   and changes nothing locally. The LP-500 guide gives that key a 3-page
   cycle (Power/SWR → Waveform → Spectrum; Setup has its own key), so no
   double press. `ModeStepTracker` sends one more press only if a press
