@@ -207,13 +207,18 @@ Specifics worth calling out:
 ## 4. UI model
 
 - `ContentView` composes the static frame: toolbar (badge / backend
-  pill / shield / wrench) + body (banner + active panel + status row +
-  keypad). The body switches between `PowerSWRView` and `SetupOverlay`
-  based on `vm.setupOpen`.
+  pill / shield / wrench) + body (banner + page area + `ControlsCard` +
+  status row + keypad). The page area shows `PowerSWRView`,
+  `WaveformView` or `SpectrumView`, following the meter's `top_mode`,
+  or `SetupOverlay` when `vm.setupOpen`. It is a flexible frame, so the
+  `ControlsCard` and keypad below it keep the same place and size on
+  every page (updated 2026-11-19; until then each page embedded its own
+  Controls card and the controls jumped on every page change).
 - `PowerSWRView` is the meter mirror: Avg + Peak power readouts in
   `ReadingCard`s with auto-scaling bargraphs, SWR card with severity
-  tint, alarm card, and a single `ControlsCard` that cycles
-  Channel / Range / Peak-mode / Alarm in place on each press. The
+  tint, alarm card. The `ControlsCard` (owned by `ContentView`) cycles
+  Channel / Range / Peak-mode / Alarm in place on each press and always
+  shows all four buttons. The
   optional `status_message` banner appears below the cards when the
   meter has an active alert. `ReadingCard` and `PowerBar` are
   `Equatable` so the layout engine can short-circuit body
@@ -226,6 +231,10 @@ Specifics worth calling out:
   be changed in CH Auto, and a 2026-10-13 bench test agrees). The
   server NACKs both in CH Auto again from LP-700-Server v0.2.6, but
   older servers forward them, so the app gate stays the primary guard.
+  The gate is per page too (`PageKeys`, 2026-11-19): on Waveform / Spectrum the
+  meter's F3–F5 set V/div, sweep, span and so on, so only CH is live
+  there, and in Setup only LCD Mode is. The card, keypad, Meter menu
+  and the view model's send guards all read the same `vm.keys`.
 - `SetupOverlay` is rendered into the same panel area when
   `vm.setupOpen` is true, replacing `PowerSWRView`. Same compositional
   choice as the embedded web client (which switches to a `<dialog>`).
