@@ -21,7 +21,7 @@ struct WaveformView: View {
         VStack(spacing: 8) {
             // Compact power strip at the top so the operator still sees
             // absolute numbers while a trace is on screen.
-            PowerStrip(vm: vm)
+            PowerStrip(vm: vm, page: .waveform)
 
             ZStack {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)

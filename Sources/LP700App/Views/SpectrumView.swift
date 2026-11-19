@@ -19,7 +19,7 @@ struct SpectrumView: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            PowerStrip(vm: vm)
+            PowerStrip(vm: vm, page: .spectrum)
 
             ZStack {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)

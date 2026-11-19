@@ -83,6 +83,7 @@ LP-700-App/
 │   ├── ServerURLTests.swift            # configuredServerURL rule shared by the 3 entry points
 │   ├── ControlsGateTests.swift         # PageKeys per page: CH Auto, CH 1–4, Waveform/Spectrum, Setup, no snapshot
 │   ├── ScopeTraceHoldTests.swift       # torn / empty scope frames hold the last clean trace for 1 s
+│   ├── PowerStripTests.swift           # Spectrum strip's dBm matches the meter's LCD
 │   ├── ModeFollowTests.swift           # view follows top_mode; LCD Mode press skips Setup only if it lands there
 │   ├── WSClientReconnectTests.swift    # retry after a refused connection; stop() drops the retry
 │   └── ProxyAuthTests.swift            # header only over TLS, base64, 401 required/rejected, local 401 stub
@@ -314,7 +315,15 @@ it. The in-process `LP700Plugin.manifest` version is not used by the Suite.
   vertical-bar FFT in green for spectrum, with the DC bin clipped to
   the rest-99th-percentile so it doesn't squash dynamic range).
   `PowerStrip` shows the live numerics above the trace because sample
-  values are display-normalised (0..255), not absolute watts.
+  values are display-normalised (0..255), not absolute watts. It shows
+  what the meter's LCD shows on that page, never SWR (the meter shows
+  none on either page): Waveform = Avg + Pk; Spectrum = one "Pwr"
+  reading (`power_peak_w`, the meter's total peak power summed over the
+  frequency bins) and its dBm. On the Spectrum page the meter sends no
+  average, its SWR bytes hold something else, and its power comes in
+  0.018 W steps, which the server decodes (LP-700-Server
+  `spectrumWattsPerStep`; an older server shows about 11× too much
+  there). Bench 2026-11-19: LCD 185 W / +52 dBm and 5 W / +37 dBm.
 - **The view follows the meter's LCD page.** `MeterViewModel.activeView`
   (`powerSWR` / `waveform` / `spectrum`) is set from `top_mode` on every
   telemetry frame (`MeterViewModel.activeView(for:)`; Setup shows

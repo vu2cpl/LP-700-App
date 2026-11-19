@@ -1,28 +1,46 @@
 import SwiftUI
 
-// Compact one-line power+SWR readout shown above scope / spectrum
+// Compact one-line power readout shown above the scope / spectrum
 // renderers. Sample frames carry display-normalised values (0..255),
 // not absolute watts, so the operator still wants the live numbers
 // from the telemetry channel handy while watching the trace.
 //
-// Avg / Pk / SWR only — no controls, no bars. The ControlsCard and
-// keypad stay in the bottom panel (visible regardless of LCD page),
-// so all the per-channel verbs remain reachable.
+// It shows what the meter's own LCD shows on that page (LP-500 guide
+// v5.4; Manoj, 2026-11-19):
+// - Waveform: average and peak power.
+// - Spectrum: one "Pwr" reading, the total peak power summed over the
+//   frequency bins, and its dBm. The meter sends no average there and
+//   the SWR bytes don't hold SWR on that page, so neither is shown.
+//   The server decodes that page's power at its own scale (LP-700-Server
+//   `spectrumWattsPerStep`).
+// No controls, no bars: the ControlsCard and keypad stay in the bottom
+// panel on every page.
 struct PowerStrip: View {
+    enum Page { case waveform, spectrum }
+
     @ObservedObject var vm: MeterViewModel
+    let page: Page
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 14) {
-            block(label: "Avg",
-                  value: formatPower(vm.snapshot?.powerAvgW),
-                  tint: .cyan)
-            block(label: "Pk",
-                  value: formatPower(vm.snapshot?.displayedPeakW),
-                  tint: .orange)
-            Spacer(minLength: 0)
-            block(label: "SWR",
-                  value: formatSWR(vm.snapshot?.swr),
-                  tint: swrTint(vm.snapshot?.swr ?? 1.0))
+            switch page {
+            case .waveform:
+                block(label: "Avg",
+                      value: formatPower(vm.snapshot?.powerAvgW),
+                      tint: .cyan)
+                block(label: "Pk",
+                      value: formatPower(vm.snapshot?.displayedPeakW),
+                      tint: .orange)
+                Spacer(minLength: 0)
+            case .spectrum:
+                block(label: "Pwr",
+                      value: formatPower(vm.snapshot?.powerPeakW),
+                      tint: .orange)
+                Spacer(minLength: 0)
+                block(label: "",
+                      value: Self.formatDBm(vm.snapshot?.powerPeakW),
+                      tint: .orange)
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
@@ -36,12 +54,23 @@ struct PowerStrip: View {
         )
     }
 
+    /// Power in dBm (dB above 1 mW), signed like the meter's "+37 dBm".
+    /// The meter drops the decimals; the app keeps one, as it does for
+    /// watts. Nothing to show when there is no power.
+    static func formatDBm(_ w: Double?) -> (String, String) {
+        guard let w, w > 0, !w.isNaN else { return ("—", "dBm") }
+        let dBm = 10 * log10(w * 1000)
+        return (String(format: "%+.1f", dBm), "dBm")
+    }
+
     @ViewBuilder
     private func block(label: String, value: (String, String), tint: Color) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 4) {
-            Text(label)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.secondary)
+            if !label.isEmpty {
+                Text(label)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
             Text(value.0)
                 .font(.system(size: 22, weight: .semibold, design: .rounded))
                 .monospacedDigit()
@@ -59,17 +88,6 @@ struct PowerStrip: View {
         if w >= 1000 { return (String(format: "%.2f", w / 1000.0), "kW") }
         if w >= 100  { return (String(format: "%.0f", w), "W") }
         return (String(format: "%.1f", w), "W")
-    }
-
-    private func formatSWR(_ s: Double?) -> (String, String) {
-        guard let s, !s.isNaN else { return ("—", "") }
-        return (String(format: "%.2f", s), "")
-    }
-
-    private func swrTint(_ swr: Double) -> Color {
-        if swr >= 2.0 { return .red }
-        if swr >= 1.5 { return .yellow }
-        return .green
     }
 }
 
