@@ -54,16 +54,6 @@ struct PageKeys: Equatable {
         }
     }
 
-    /// Short reason shown under a locked keypad button.
-    var lockedSubtitle: String {
-        switch lock {
-        case .chAuto: return "In CH Auto"
-        case .samplePage: return "Power/SWR only"
-        case .setupPage: return "Not in Setup"
-        case nil: return ""
-        }
-    }
-
     /// One line under the Controls card when buttons on it are locked.
     var cardNote: String? {
         switch lock {

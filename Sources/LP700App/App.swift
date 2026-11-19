@@ -150,7 +150,7 @@ public struct LP700StandaloneApp: App {
             Button("Step LCD Mode") { vm.sendModeStep() }
                 .keyboardShortcut("m", modifiers: [.command])
             Divider()
-            Button("Resync") { vm.resync() }
+            Button("Sync") { vm.resync() }
                 .keyboardShortcut("y", modifiers: [.command])
             Button(vm.setupOpen ? "Close Setup" : "Open Setup") { vm.toggleSetup() }
                 .keyboardShortcut(".", modifiers: [.command])

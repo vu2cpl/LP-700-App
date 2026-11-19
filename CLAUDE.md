@@ -67,7 +67,7 @@ LP-700-App/
 │   ├── Views/
 │   │   ├── ContentView.swift           # toolbar + page area + pinned ControlsCard + bottom CompactPanel (status + keypad)
 │   │   ├── PowerSWRView.swift          # PowerSWRCombinedCard (mode-driven big readout + Avg/Pk/Ref + 3 graduated bars) + ControlsCard type
-│   │   ├── KeypadView.swift            # inline keypad row (Range / Alarm / Mode / Resync)
+│   │   ├── KeypadView.swift            # inline keypad row (Range / Alarm / Mode / Sync), one title size for all
 │   │   ├── WaveformView.swift          # scope trace (Canvas) for the meter's Waveform page
 │   │   ├── SpectrumView.swift          # FFT bars (Canvas) for the meter's Spectrum page
 │   │   ├── SampleViewShared.swift      # PowerStrip + PlaceholderText shared by the two views above
@@ -237,12 +237,22 @@ it. The in-process `LP700Plugin.manifest` version is not used by the Suite.
   CLAUDE.md): before calling UI work done, switch through every page
   and check the shared buttons don't move. Until 0a20fe0 each page
   embedded its own card (the sample pages a 2-button one), so the card
-  and keypad jumped on every page change. Labels shrink to fit narrow
-  windows, but a hidden full-size line in each button sets its height,
-  so a long or missing label can't make a button or the row taller or
-  shorter on some page. The keypad's page key is titled "Mode" with no
-  subtitle (the status row's Top field names the page), and its title
-  scales to the largest size the button allows (Manoj, 2026-11-19).
+  and keypad jumped on every page change. Button heights are fixed (a
+  hidden full-size line in each Controls button, a fixed label height in
+  the keypad), so a long or shrunken label can't make a button or a row
+  taller or shorter on some page.
+- **Keypad titles: one size for all four, as big as fits** (Manoj,
+  2026-11-19). The keypad shows Range / Alarm / Mode / Sync as single
+  lines in the Controls card's value font (15 pt semibold rounded, like
+  "A → 1"). `ViewThatFits` steps all four down together, a point at a
+  time to 11 pt, only when the window is too narrow; each button
+  reserves the widest title's room, because the row splits its width
+  equally ("Range" was cut off when only the row total was checked).
+  No small second lines: they repeated the Controls card (range, alarm
+  state), its lock note, and the status row's Top field (the page).
+  Never size one key's title on its own: Manoj found a big "Mode" next
+  to small titles "horrible". "Mode" is the LCD page key (F1), "Sync"
+  re-requests a snapshot (`vm.resync()`); the Meter menu says "Sync" too.
 - **Every key is gated by the meter's page (`PageKeys`).** Each app
   control is a raw key press (Mode = F1, CH = F2, Range = F3,
   Alarm = F4, Peak/Avg/Tune = F5), and the meter gives F2–F5 another

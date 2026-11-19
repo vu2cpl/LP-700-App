@@ -224,7 +224,8 @@ Specifics worth calling out:
   `Equatable` so the layout engine can short-circuit body
   re-evaluation (see [§ 2.1](#21-telemetry-coalescing-and-render-budgets)).
 - `KeypadView` is the inline keypad row inside the bottom
-  `CompactPanel`: Range step, Alarm toggle, Mode (LCD page) step, Resync.
+  `CompactPanel`: Range step, Alarm toggle, Mode (LCD page) step, Sync
+  (resync), all four titles one size.
   Disabled when `!allowControl || connection != .connected || setupOpen`.
   Range and Alarm additionally grey out when `auto_channel == true`,
   here and in `ControlsCard` (the LP-500 user guide says neither can

@@ -54,7 +54,6 @@ final class ControlsGateTests: XCTestCase {
 
             let keys = PageKeys.make(try snapshot(autoChannel: false, page: page))
             XCTAssertEqual(keys.lock, .samplePage)
-            XCTAssertEqual(keys.lockedSubtitle, "Power/SWR only")
         }
     }
 
