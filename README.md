@@ -42,8 +42,8 @@ page; a key the page doesn't use is greyed out in its slot, not hidden.
   matching page). The app shows whichever page the meter is on;
   the keypad's Mode button presses the meter's Mode key (Power/SWR →
   Waveform → Spectrum → Power/SWR). On these pages CH picks the
-  page's own CH 1–4 (the meter offers no Auto there). Needs a server
-  with LP-700-Server PR #9. A compact power strip above the trace shows
+  page's own CH 1–4 (the meter offers no Auto there). Needs
+  LP-700-Server v0.2.7 or later. A compact power strip above the trace shows
   what the meter's own screen shows on that page: average and peak
   power on Waveform, one power reading and its dBm on Spectrum. Only CH works on these pages: there the meter's Range,
   Alarm and Peak keys set V/div, sweep, span and so on, which the
