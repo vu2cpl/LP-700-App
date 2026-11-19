@@ -18,16 +18,6 @@ struct WaveformView: View {
     @ObservedObject var vm: MeterViewModel
 
     var body: some View {
-        // Build the same controls model PowerSWRView uses, so a single
-        // factory drives every view's CH / Rng / Mode / Alm state.
-        let controls = PowerSWRModel.make(
-            snapshot: vm.snapshot,
-            allowControl: vm.allowControl,
-            connected: vm.connection == .connected,
-            setupOpen: vm.setupOpen,
-            skipAutoChannel: true
-        ).controls
-
         VStack(spacing: 8) {
             // Compact power strip at the top so the operator still sees
             // absolute numbers while a trace is on screen.
@@ -60,14 +50,7 @@ struct WaveformView: View {
                 }
             }
 
-            ControlsCard(model: controls,
-                         style: .sampleMode,
-                         onChannelStep: { vm.sendChannelStep($0) },
-                         onRangeStep:   { vm.sendRangeStep() },
-                         onPeakStep:    { vm.sendPeakToggle($0) },
-                         onAlarmToggle: { vm.sendAlarmToggle() })
-
-            Text("Signal mode (CW/SSB/PSK), waveform subtype, and user presets are on the meter's front panel — server doesn't yet expose those commands.")
+            Text("V/div, sweep, waveform style and test tone are set on the meter's front panel. The server doesn't report them yet.")
                 .font(.system(size: 9))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.leading)

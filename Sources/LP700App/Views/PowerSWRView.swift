@@ -75,7 +75,7 @@ extension PowerSWRModel {
                      setupOpen: Bool,
                      skipAutoChannel: Bool = false) -> PowerSWRModel {
         let baseDisabled = !allowControl || !connected || setupOpen
-        let autoCh = snapshot?.autoChannel == true
+        let keys = PageKeys.make(snapshot)
 
         // Always auto-scale the bargraph for the visual display, even
         // when the meter has a manual range set. The meter's range
@@ -113,16 +113,16 @@ extension PowerSWRModel {
                 nextPeakMode: nextPeakMode(snapshot?.peakMode),
                 alarmLabel: alarmLabel(snapshot),
                 alarmTint: alarmTint(snapshot),
-                channelDisabled: baseDisabled,
-                // Range and Alarm are per-channel on the meter, and the
-                // LP-500 user guide v5.4 says of both: "This choice can't
-                // be changed when the CH button is in Auto." Bench-tested
-                // 2026-10-13: F3 / F4 do nothing in CH Auto. (A 2026-05-17
-                // change ungated Range here on a misquote of that page.)
-                rangeDisabled: baseDisabled || autoCh,
-                peakDisabled: baseDisabled,
-                alarmDisabled: baseDisabled || autoCh,
-                lockNote: autoCh ? "Range and Alarm can't be changed in CH Auto. Pick CH 1–4." : nil
+                // Which keys the meter's page allows: Range and Alarm
+                // are locked in CH Auto ("This choice can't be changed
+                // when the CH button is in Auto", LP-500 user guide v5.4;
+                // bench-tested 2026-10-13), and on the Setup page every
+                // key but LCD Mode adjusts a setting. See PageKeys.
+                channelDisabled: baseDisabled || !keys.channel,
+                rangeDisabled: baseDisabled || !keys.range,
+                peakDisabled: baseDisabled || !keys.peak,
+                alarmDisabled: baseDisabled || !keys.alarm,
+                lockNote: keys.cardNote
             ),
             statusMessage: snapshot?.statusMessage ?? ""
         )
@@ -283,27 +283,19 @@ private func alarmTint(_ s: Snapshot?) -> Color? {
 
 // MARK: - View
 
-// Mirrors the LP-500/700 Power/SWR LCD screen. Avg + Peak power readouts
-// with scale bars, SWR + alarm, and a single Controls card that cycles
-// Channel / Range / Peak-mode / Alarm in place on each press.
+// Mirrors the LP-500/700 Power/SWR LCD screen: Avg + Peak power readouts
+// with scale bars, SWR, and the meter's status message. The Controls
+// card is not part of this view: ContentView places one card below every
+// page so its buttons never move (ControlsCard).
 //
-// The view is `Equatable` over its `model`; the `vm` reference is stable
-// for the lifetime of the window so we treat it as equal regardless. This
-// lets SwiftUI's `.equatable()` short-circuit the entire subtree (cards
-// + bargraphs + ControlsCard) on every parent re-render where displayed
+// The view is `Equatable` over its `model`. This lets SwiftUI's
+// `.equatable()` short-circuit the entire subtree (cards + bargraphs) on
+// every parent re-render where displayed
 // values are unchanged — extremely common after `formatPower` rounds
 // adjacent samples to the same string and the bar fraction quantizes
 // into the same 1 % step.
 struct PowerSWRView: View, Equatable {
     let model: PowerSWRModel
-    // Held by reference; not @ObservedObject (we don't need observation
-    // here — ContentView already observes and rebuilds `model` for us).
-    // Used only to dispatch control verbs from button taps.
-    let vm: MeterViewModel
-
-    static func == (lhs: PowerSWRView, rhs: PowerSWRView) -> Bool {
-        lhs.model == rhs.model && lhs.vm === rhs.vm
-    }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -320,12 +312,6 @@ struct PowerSWRView: View, Equatable {
                                  scaleLabel: model.scaleLabel,
                                  label: model.cardLabel)
                 .equatable()
-
-            ControlsCard(model: model.controls,
-                         onChannelStep: { vm.sendChannelStep($0) },
-                         onRangeStep:   { vm.sendRangeStep() },
-                         onPeakStep:    { vm.sendPeakToggle($0) },
-                         onAlarmToggle: { vm.sendAlarmToggle() })
 
             if !model.statusMessage.isEmpty {
                 Label(model.statusMessage, systemImage: "exclamationmark.bubble")
@@ -506,25 +492,17 @@ private struct PowerBar: View {
 // fresh by the parent on each re-render but only invoked on user input,
 // so their non-Equatability doesn't cost render work.
 //
-// Visible in every top-level view (PowerSWRView, WaveformView,
-// SpectrumView) so the operator can always cycle Channel / Range /
-// Mode / Alarm without backing out of the current LCD page. The
-// underlying meter constraints (e.g. auto-channel disallowed on the
-// Waveform / Spectrum LCD pages) are surfaced as placeholders in the
-// trace area, not by removing the controls.
+// One card for every page, owned by ContentView and placed above the
+// keypad, so its four buttons sit in the same place on Power/SWR,
+// Waveform, Spectrum and Setup (they used to live inside each page view
+// and moved on every page change). A button whose key does another job
+// on the current page stays in its slot, greyed out, and the note line
+// below says why (PageKeys). On Waveform / Spectrum only CH, the page's
+// own CH 1–4, is live: the keys behind Rng / Mode / Alm set V/div or dB
+// range, waveform style or averaging, and sweep or span there, and a
+// Range press changed V/div on the bench (2026-11-19).
 struct ControlsCard: View {
-    /// Which set of cycle buttons to show.
-    /// - `.full`: CH / Rng / Mode (peak/avg/tune) / Alm — Power/SWR view.
-    /// - `.sampleMode`: CH / Rng only — Waveform / Spectrum views.
-    ///   The meter's actual F-keys on those LCD pages are Signal Mode
-    ///   (CW/SSB/PSK), Wfm subtype, and User 1/2 — none of which the
-    ///   server currently exposes verbs for. Hide the peak-mode and
-    ///   alarm buttons here because they don't apply on those pages
-    ///   (peak-mode is power-view specific; alarm is per-channel-page).
-    enum Style { case full, sampleMode }
-
     var model: ControlsModel
-    var style: Style = .full
     var onChannelStep: (Int) -> Void
     var onRangeStep: () -> Void
     var onPeakStep: (Int) -> Void
@@ -544,22 +522,20 @@ struct ControlsCard: View {
                             disabled: model.rangeDisabled) {
                     onRangeStep()
                 }
-                if style == .full {
-                    cycleButton(title: "Mode",
-                                value: model.peakModeLabel,
-                                disabled: model.peakDisabled) {
-                        onPeakStep(model.nextPeakMode)
-                    }
-                    cycleButton(title: "Alm",
-                                value: model.alarmLabel,
-                                disabled: model.alarmDisabled,
-                                valueTint: model.alarmTint) {
-                        onAlarmToggle()
-                    }
+                cycleButton(title: "Mode",
+                            value: model.peakModeLabel,
+                            disabled: model.peakDisabled) {
+                    onPeakStep(model.nextPeakMode)
+                }
+                cycleButton(title: "Alm",
+                            value: model.alarmLabel,
+                            disabled: model.alarmDisabled,
+                            valueTint: model.alarmTint) {
+                    onAlarmToggle()
                 }
             }
             // Always reserve space for the lock note so the card height
-            // doesn't change when the user cycles between CH A and CH 1–4.
+            // doesn't change between pages or between CH A and CH 1–4.
             Text(model.lockNote ?? " ")
                 .font(.system(size: 9))
                 .foregroundStyle(.secondary)

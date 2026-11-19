@@ -118,7 +118,17 @@ struct ContentView: View {
     // MARK: - Main pane
 
     private var meterPane: some View {
-        VStack(spacing: 10) {
+        // Built once per render: the page view and the shared Controls
+        // card both read it.
+        let model = PowerSWRModel.make(
+            snapshot: vm.snapshot,
+            allowControl: vm.allowControl,
+            connected: vm.connection == .connected,
+            setupOpen: vm.setupOpen,
+            // The Waveform / Spectrum pages have their own CH 1–4, no Auto.
+            skipAutoChannel: vm.activeView != .powerSWR
+        )
+        return VStack(spacing: 10) {
             if let error = vm.lastConnectError {
                 BannerLabel(text: error)
             }
@@ -130,17 +140,31 @@ struct ContentView: View {
             // own header (which is mode-aware: "Average" / "Peak" / "Tune"),
             // so we don't wrap it in another titled Panel. Setup overlay
             // still gets the labelled chrome.
-            if vm.setupOpen {
-                Panel {
-                    VStack(alignment: .leading, spacing: 10) {
-                        PanelHeader(title: "Setup overlay", trailing: callsignAccessory)
-                        Divider()
-                        activeView
+            //
+            // The page takes all the height that varies, so the Controls
+            // card and the keypad below it sit in the same place on every
+            // page. They used to live inside each page view and jumped on
+            // every page change.
+            Group {
+                if vm.setupOpen {
+                    Panel {
+                        VStack(alignment: .leading, spacing: 10) {
+                            PanelHeader(title: "Setup overlay", trailing: callsignAccessory)
+                            Divider()
+                            activeView(model)
+                        }
                     }
+                } else {
+                    activeView(model)
                 }
-            } else {
-                activeView
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+
+            ControlsCard(model: model.controls,
+                         onChannelStep: { vm.sendChannelStep($0) },
+                         onRangeStep:   { vm.sendRangeStep() },
+                         onPeakStep:    { vm.sendPeakToggle($0) },
+                         onAlarmToggle: { vm.sendAlarmToggle() })
 
             CompactPanel {
                 VStack(alignment: .leading, spacing: 6) {
@@ -171,7 +195,7 @@ struct ContentView: View {
     }
 
     @ViewBuilder
-    private var activeView: some View {
+    private func activeView(_ model: PowerSWRModel) -> some View {
         if vm.setupOpen {
             SetupOverlay(vm: vm)
         } else {
@@ -184,16 +208,8 @@ struct ContentView: View {
             case .spectrum:
                 SpectrumView(vm: vm)
             case .powerSWR:
-                PowerSWRView(
-                    model: PowerSWRModel.make(
-                        snapshot: vm.snapshot,
-                        allowControl: vm.allowControl,
-                        connected: vm.connection == .connected,
-                        setupOpen: vm.setupOpen
-                    ),
-                    vm: vm
-                )
-                .equatable()
+                PowerSWRView(model: model)
+                    .equatable()
             }
         }
     }

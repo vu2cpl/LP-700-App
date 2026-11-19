@@ -278,6 +278,15 @@ final class MeterViewModel: ObservableObject {
     // reflects the new state in the @Published `snapshot`. Server is
     // now reliable so we don't need the optimistic-update layer the
     // older WIP carried.
+    //
+    // Every verb is a press of one of the meter's keys, and F2-F5 mean
+    // something else on the Waveform, Spectrum and Setup pages. Each
+    // sender checks `keys`, so no entry point (buttons, menu commands,
+    // keyboard shortcuts, the plugin) can press a key the current page
+    // gives another job. See PageKeys.
+
+    /// Which keys the meter's current page lets the app press.
+    var keys: PageKeys { PageKeys.make(snapshot) }
 
     /// Cycle the meter range one step. Server's `range_step` verb
     /// ignores the value parameter (firmware always advances by one);
@@ -285,6 +294,7 @@ final class MeterViewModel: ObservableObject {
     /// re-pressing converges even if the meter and app momentarily
     /// disagree.
     func sendRangeStep() {
+        guard keys.range else { return }
         let cycle = RangeNames.cycle
         let current = snapshot?.range ?? "auto"
         let idx = cycle.firstIndex(of: current) ?? 0
@@ -294,16 +304,19 @@ final class MeterViewModel: ObservableObject {
 
     /// Set the meter channel: 0 = auto, 1..4 = explicit channel.
     func sendChannelStep(_ value: Int) {
+        guard keys.channel else { return }
         sendCommand(.channelStep, value: value)
     }
 
     /// Force the meter into one of peak_hold (0), average (1), tune (2).
     func sendPeakToggle(_ value: Int) {
+        guard keys.peak else { return }
         sendCommand(.peakToggle, value: value)
     }
 
     /// Toggle the alarm: off ↔ on. Reads current state from snapshot.
     func sendAlarmToggle() {
+        guard keys.alarm else { return }
         let next = (snapshot?.alarmEnabled == true) ? 0 : 1
         sendCommand(.alarmToggle, value: next)
     }

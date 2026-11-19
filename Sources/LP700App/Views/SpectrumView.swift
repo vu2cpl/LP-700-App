@@ -18,14 +18,6 @@ struct SpectrumView: View {
     @ObservedObject var vm: MeterViewModel
 
     var body: some View {
-        let controls = PowerSWRModel.make(
-            snapshot: vm.snapshot,
-            allowControl: vm.allowControl,
-            connected: vm.connection == .connected,
-            setupOpen: vm.setupOpen,
-            skipAutoChannel: true
-        ).controls
-
         VStack(spacing: 8) {
             PowerStrip(vm: vm)
 
@@ -52,14 +44,7 @@ struct SpectrumView: View {
                 }
             }
 
-            ControlsCard(model: controls,
-                         style: .sampleMode,
-                         onChannelStep: { vm.sendChannelStep($0) },
-                         onRangeStep:   { vm.sendRangeStep() },
-                         onPeakStep:    { vm.sendPeakToggle($0) },
-                         onAlarmToggle: { vm.sendAlarmToggle() })
-
-            Text("Signal mode, FFT window, span, and user presets are on the meter's front panel — server doesn't yet expose those commands.")
+            Text("dB range, span, averaging and test tone are set on the meter's front panel. The server doesn't report them yet.")
                 .font(.system(size: 9))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.leading)

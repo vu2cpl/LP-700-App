@@ -8,25 +8,26 @@ struct KeypadView: View {
 
     var body: some View {
         let disabled = !vm.allowControl || vm.connection != .connected || vm.setupOpen
-        // The meter doesn't let Range or Alarm change while CH is in Auto
-        // (LP-500 user guide v5.4; bench-tested 2026-10-13), so grey them
-        // out rather than send verbs the firmware ignores.
-        let autoCh = vm.snapshot?.autoChannel == true
+        // Range and Alarm are the meter's F3 / F4. They're locked in CH
+        // Auto (LP-500 user guide v5.4; bench-tested 2026-10-13), and on
+        // the Waveform, Spectrum and Setup pages those keys do other jobs
+        // (V/div, sweep, span, adjusting a setting). See PageKeys.
+        let keys = vm.keys
 
         HStack(spacing: 10) {
             keyButton(title: "Range",
                       systemImage: "arrow.triangle.2.circlepath",
-                      subtitle: autoCh ? "Locked (auto-CH)" : (vm.snapshot?.range ?? "—"),
+                      subtitle: keys.range ? (vm.snapshot?.range ?? "—") : keys.lockedSubtitle,
                       action: { vm.sendRangeStep() })
                 .keyboardShortcut("r", modifiers: [.command])
-                .disabled(autoCh)
+                .disabled(!keys.range)
 
             keyButton(title: "Alarm",
                       systemImage: alarmIcon,
-                      subtitle: autoCh ? "Locked (auto-CH)" : alarmSubtitle,
+                      subtitle: keys.alarm ? alarmSubtitle : keys.lockedSubtitle,
                       action: { vm.sendAlarmToggle() })
                 .keyboardShortcut("a", modifiers: [.command])
-                .disabled(autoCh)
+                .disabled(!keys.alarm)
 
             keyButton(title: "LCD Mode",
                       systemImage: "rectangle.3.offgrid",
