@@ -55,6 +55,11 @@ final class MeterViewModel: ObservableObject {
     @Published var lastScopeAt: Date = .distantPast
     @Published var lastSpectrumAt: Date = .distantPast
 
+    // Holds the last clean waveform trace through all-zero and torn
+    // frames from the meter. `lastScopeAt` still moves on every frame,
+    // because frames are arriving; only `lastScope` is held.
+    private var scopeHold = ScopeTraceHold()
+
     // Which top-level view ContentView should render. It follows the
     // meter's LCD page (`top_mode`) on every telemetry frame, so a page
     // change from the meter's own Mode key, another client, or the app's
@@ -198,6 +203,7 @@ final class MeterViewModel: ObservableObject {
         lastSpectrum = nil
         lastScopeAt = .distantPast
         lastSpectrumAt = .distantPast
+        scopeHold = ScopeTraceHold()
         activeView = .powerSWR
         lastTopMode = nil
         modeStepTracker = ModeStepTracker()
@@ -390,8 +396,9 @@ final class MeterViewModel: ObservableObject {
                 scheduleBannerDismiss()
             }
         case .scope(_, _, let payload):
-            lastScope = payload
-            lastScopeAt = Date()
+            let now = Date()
+            if scopeHold.accept(payload.samples, at: now) { lastScope = payload }
+            lastScopeAt = now
         case .spectrum(_, _, let payload):
             lastSpectrum = payload
             lastSpectrumAt = Date()
