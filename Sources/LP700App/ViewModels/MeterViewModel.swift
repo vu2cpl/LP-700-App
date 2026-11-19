@@ -55,21 +55,30 @@ final class MeterViewModel: ObservableObject {
     @Published var lastScopeAt: Date = .distantPast
     @Published var lastSpectrumAt: Date = .distantPast
 
-    // Which top-level view ContentView should render. Purely user-
-    // driven via `sendModeStep()` — the cycle is Power/SWR → Waveform
-    // → Spectrum → Power/SWR. No autonomous switching from sample-
-    // frame arrival or telemetry top_mode (both turned out to be
-    // unstable enough to make the view flicker). The operator's
-    // intent is what the app shows; the meter's actual LCD page is
-    // assumed to follow because mode_step taps go to the meter too.
+    // Which top-level view ContentView should render. It follows the
+    // meter's LCD page (`top_mode`) on every telemetry frame, so a page
+    // change from the meter's own Mode key, another client, or the app's
+    // LCD Mode button all land the app on the same page. (Until
+    // 2026-11-19 it was user-driven and only seeded once, because the
+    // server's telemetry flapped between pages; LP-700-Server PR #9
+    // fixed that, and a user-driven view drifted out of step with the
+    // meter on the bench.) The Setup page has no view of its own and
+    // shows Power/SWR.
     enum ActiveView: Equatable { case powerSWR, waveform, spectrum }
     @Published var activeView: ActiveView = .powerSWR
 
-    // One-shot: on first telemetry frame after connect, copy
-    // `top_mode` into activeView so the app lands on whatever LCD
-    // page the meter is showing. After that, user button taps drive
-    // activeView and we don't follow the wire.
-    private var initialActiveViewSet = false
+    nonisolated static func activeView(for topMode: TopMode) -> ActiveView {
+        switch topMode {
+        case .powerSWR, .setup: return .powerSWR
+        case .waveform:         return .waveform
+        case .spectrum:         return .spectrum
+        }
+    }
+
+    /// Page the last telemetry frame reported, and the LCD Mode press
+    /// that may still have to skip the Setup page.
+    private var lastTopMode: TopMode?
+    private var modeStepTracker = ModeStepTracker()
 
     // (Control state — channel / peak_mode / alarm / range — was
     // briefly tracked in dedicated debounced @Published fields as a
@@ -190,7 +199,8 @@ final class MeterViewModel: ObservableObject {
         lastScopeAt = .distantPast
         lastSpectrumAt = .distantPast
         activeView = .powerSWR
-        initialActiveViewSet = false
+        lastTopMode = nil
+        modeStepTracker = ModeStepTracker()
     }
 
     func stop() async {
@@ -292,25 +302,17 @@ final class MeterViewModel: ObservableObject {
         sendCommand(.alarmToggle, value: next)
     }
 
-    /// Cycle the meter's top-level LCD mode. The app's visible cycle
-    /// is 3-mode (Power-SWR → Waveform → Spectrum → Power-SWR), but
-    /// the meter's hardware cycle is 4-mode (… → Setup → …). To keep
-    /// app and meter in lock-step we send an extra `mode_step` when
-    /// wrapping from Spectrum back to Power/SWR — that pulses the
-    /// meter from spectrum → setup → power_swr in one go, so its
-    /// physical LCD ends up on the same page as the app's view.
+    /// Press the meter's Mode key once. The meter changes page and the
+    /// app's view follows from the next telemetry frame; nothing changes
+    /// locally first (server is authoritative). The LP-500 user guide
+    /// v5.4 gives the Mode key a 3-page cycle (Power/SWR → Waveform →
+    /// Spectrum), with Setup on its own key. In case some firmware does
+    /// step into Setup, `ModeStepTracker` sends one more press if this
+    /// press is seen to land there.
     func sendModeStep() {
-        let prev = activeView
-        switch prev {
-        case .powerSWR: activeView = .waveform
-        case .waveform: activeView = .spectrum
-        case .spectrum: activeView = .powerSWR
-        }
+        guard allowControl, connection == .connected else { return }
+        modeStepTracker.didSendModeStep(from: lastTopMode, at: Date())
         sendCommand(.modeStep, value: nil)
-        if prev == .spectrum {
-            // Skip the meter's setup page so the cycle stays aligned.
-            sendCommand(.modeStep, value: nil)
-        }
     }
 
     func resync() { sendRaw(.resync) }
@@ -368,16 +370,14 @@ final class MeterViewModel: ObservableObject {
             // to bound SwiftUI re-render cost.
             handleAlarmEdge(data: data)
             schedulePublish(data)
-            // Initial activeView seed: on the first telemetry frame
-            // after connect, follow the meter's top_mode. After that,
-            // activeView is purely user-driven via sendModeStep.
-            if !initialActiveViewSet {
-                initialActiveViewSet = true
-                switch data.topMode {
-                case .powerSWR, .setup: activeView = .powerSWR
-                case .waveform:         activeView = .waveform
-                case .spectrum:         activeView = .spectrum
-                }
+            // Follow the meter's page. Set only on change: @Published
+            // notifies on every assignment, and frames arrive faster
+            // than the 10 Hz snapshot publish.
+            lastTopMode = data.topMode
+            let view = Self.activeView(for: data.topMode)
+            if activeView != view { activeView = view }
+            if modeStepTracker.observe(data.topMode, at: Date()) {
+                sendCommand(.modeStep, value: nil)
             }
         case .heartbeat:
             break
@@ -461,5 +461,44 @@ final class MeterViewModel: ObservableObject {
                                         trigger: nil)
         UNUserNotificationCenter.current().add(req) { _ in }
         #endif
+    }
+}
+
+/// Decides whether an LCD Mode press from the app needs one more press
+/// to get past the meter's Setup page. Armed by each press with the page
+/// the meter was on; the first telemetry frame that reports a different
+/// page settles it: Setup → press once more (Mode from Setup returns to
+/// Power/SWR), anything else → done. A press that shows no page change
+/// within `window` is dropped, so a Setup page the operator opens later
+/// with the meter's own Setup key is left alone.
+struct ModeStepTracker {
+    static let window: TimeInterval = 2
+
+    private var pendingFrom: TopMode?
+    private var pendingSince: Date?
+
+    mutating func didSendModeStep(from page: TopMode?, at now: Date) {
+        pendingFrom = page
+        pendingSince = now
+    }
+
+    /// Returns true when the caller should send one more `mode_step`.
+    mutating func observe(_ page: TopMode, at now: Date) -> Bool {
+        guard let since = pendingSince else { return false }
+        if now.timeIntervalSince(since) > Self.window {
+            clear()
+            return false
+        }
+        // Still on the page the press started from: the meter hasn't
+        // reported the change yet. (A nil start page means we pressed
+        // before any telemetry; any page settles it.)
+        if let from = pendingFrom, page == from { return false }
+        clear()
+        return page == .setup
+    }
+
+    private mutating func clear() {
+        pendingFrom = nil
+        pendingSince = nil
     }
 }

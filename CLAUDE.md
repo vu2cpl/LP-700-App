@@ -66,6 +66,9 @@ LP-700-App/
 │   │   ├── ContentView.swift           # toolbar + body composition + bottom CompactPanel (status + keypad)
 │   │   ├── PowerSWRView.swift          # PowerSWRCombinedCard (mode-driven big readout + Avg/Pk/Ref + 3 graduated bars) + ControlsCard
 │   │   ├── KeypadView.swift            # inline keypad row (Range / Alarm / LCD Mode / Resync)
+│   │   ├── WaveformView.swift          # scope trace (Canvas) for the meter's Waveform page
+│   │   ├── SpectrumView.swift          # FFT bars (Canvas) for the meter's Spectrum page
+│   │   ├── SampleViewShared.swift      # PowerStrip + PlaceholderText shared by the two views above
 │   │   ├── ConnectionSheet.swift       # first-launch sheet (Cmd+K)
 │   │   ├── PreferencesView.swift       # Settings scene (Cmd+,)
 │   │   ├── SetupOverlay.swift          # log-level picker + backend annotation
@@ -77,6 +80,7 @@ LP-700-App/
 │   ├── UpdateCheckerTests.swift        # version compare, automatic-check rule, dev skip
 │   ├── ServerURLTests.swift            # configuredServerURL rule shared by the 3 entry points
 │   ├── ControlsGateTests.swift         # Range / Alarm greyed out in CH Auto, usable on CH 1–4
+│   ├── ModeFollowTests.swift           # view follows top_mode; LCD Mode press skips Setup only if it lands there
 │   ├── WSClientReconnectTests.swift    # retry after a refused connection; stop() drops the retry
 │   └── ProxyAuthTests.swift            # header only over TLS, base64, 401 required/rejected, local 401 stub
 ├── Resources/Info.plist                # bundle template (__VERSION__ substituted)
@@ -268,26 +272,35 @@ it. The in-process `LP700Plugin.manifest` version is not used by the Suite.
   the rest-99th-percentile so it doesn't squash dynamic range).
   `PowerStrip` shows the live numerics above the trace because sample
   values are display-normalised (0..255), not absolute watts.
-- **View dispatch is purely user-driven.** `MeterViewModel.activeView`
-  is an enum (`powerSWR` / `waveform` / `spectrum`) cycled by
-  `sendModeStep()` and seeded one-shot on the first telemetry frame
-  after connect (so the app lands on whatever LCD page the meter is
-  showing). No auto-switching on sample-frame arrival or telemetry
-  `top_mode` jitter. The meter's full 4-step cycle includes a Setup
-  page that we don't mirror in-app, so the wrap from Spectrum → Power/SWR
-  sends **two** `mode_step` commands to skip past the meter's setup
-  page in lock-step.
-- **Auto-channel is hardware-invalid on the Waveform / Spectrum LCD
-  pages.** The LP-500/700 firmware doesn't decode sample buffers
-  cleanly when `auto_channel == true`. Server-side gates emission on
-  `channel ∈ {1..4}`; client-side, both views show a placeholder
-  ("Switch to CH 1–4 below") in the trace area when `autoChannel` is
-  active, while still rendering the `ControlsCard` + `PowerStrip` so
-  the operator can switch channels without backing out. The
+- **The view follows the meter's LCD page.** `MeterViewModel.activeView`
+  (`powerSWR` / `waveform` / `spectrum`) is set from `top_mode` on every
+  telemetry frame (`MeterViewModel.activeView(for:)`; Setup shows
+  Power/SWR). The LCD Mode button only presses the meter's Mode key once
+  and changes nothing locally. The LP-500 guide gives that key a 3-page
+  cycle (Power/SWR → Waveform → Spectrum; Setup has its own key), so no
+  double press. `ModeStepTracker` sends one more press only if a press
+  from the app is seen to land on Setup within 2 s. `ModeFollowTests`
+  pins both. History: until 2026-11-19 the view was user-driven and only
+  seeded once, because the server's telemetry flapped between pages
+  (fixed in LP-700-Server PR #9), and the Spectrum wrap sent two
+  presses for a "4-page cycle"; on the bench that left the app on
+  Waveform while the meter showed Spectrum.
+- **The Waveform / Spectrum pages have their own CH 1–4, never Auto.**
+  LP-500 guide v5.4: "CH Auto is not offered in the 'scope mode … The
+  channel selection for the 'scope mode is independent of the Power/SWR
+  mode" (same for Spectrum). On these pages the CH button (F2) cycles
+  1 → 2 → 3 → 4 → 1. A server with LP-700-Server PR #9 reports
+  `auto_channel: false` and the page's channel there; older servers read
+  them as CH Auto whenever Power/SWR is in CH Auto and hold every trace
+  back. The views keep an `autoChannel` placeholder only for that case,
+  and it says to update the server. (An earlier note here called Auto
+  "hardware-invalid" on these pages; that was a misreading.) The
   `ControlsCard.Style` enum (`.full` / `.sampleMode`) drops the
   peak-mode + alarm buttons in the sample views (they aren't the F-keys
   the meter shows on those pages — see the wfm-spec-fkeys handover on
-  the server fork for the future expansion).
+  the server fork for the future expansion). Known gap: the keypad row's
+  Range / Alarm stay live there, where F3 = V/div or dB range and F4 =
+  signal mode or span, and `range` still uses Power/SWR names.
 
 - **Three entry points, one connect rule.** The standalone window
   (`LP700StandaloneApp.bootstrap()`), the in-process plugin

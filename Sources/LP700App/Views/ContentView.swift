@@ -175,11 +175,9 @@ struct ContentView: View {
         if vm.setupOpen {
             SetupOverlay(vm: vm)
         } else {
-            // View dispatch is driven by `vm.activeView`, which is
-            // purely user-driven (LCD Mode button cycles it). No
-            // autonomous switching from sample-frame arrival or
-            // telemetry top_mode — both are unstable enough that
-            // any auto-detection just flickers the view.
+            // View dispatch follows `vm.activeView`, which tracks the
+            // meter's LCD page (telemetry `top_mode`); the LCD Mode
+            // button only presses the meter's Mode key.
             switch vm.activeView {
             case .waveform:
                 WaveformView(vm: vm)

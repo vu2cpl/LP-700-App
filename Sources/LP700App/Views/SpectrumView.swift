@@ -37,13 +37,10 @@ struct SpectrumView: View {
                             .strokeBorder(Color.secondary.opacity(0.15), lineWidth: 0.5)
                     )
 
-                // See the same note in WaveformView: auto-channel isn't
-                // supported on the Spectrum LCD page. Refuse to render
-                // a trace that's known to be indeterminate — but keep
-                // the controls visible so the operator can switch CH
-                // without backing out of the page.
+                // See the same note in WaveformView: only a server
+                // without LP-700-Server PR #9 reports CH Auto here.
                 if vm.snapshot?.autoChannel == true {
-                    PlaceholderText("Switch to CH 1–4 below. Auto-channel isn't supported on the Spectrum LCD page.")
+                    PlaceholderText("No trace: this LP-700-Server reads the page as CH Auto and holds traces back. Update the server.")
                 } else if let spec = vm.lastSpectrum, isFresh(vm.lastSpectrumAt) {
                     Canvas { ctx, size in
                         drawSpectrum(bins: spec.bins, in: size, ctx: ctx)
@@ -51,7 +48,7 @@ struct SpectrumView: View {
                     .padding(10)
                     .drawingGroup()
                 } else {
-                    PlaceholderText("Spectrum — keep meter on the Spectrum LCD page (F1)")
+                    PlaceholderText("Waiting for spectrum data from the meter")
                 }
             }
 

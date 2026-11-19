@@ -41,16 +41,14 @@ struct WaveformView: View {
                             .strokeBorder(Color.secondary.opacity(0.15), lineWidth: 0.5)
                     )
 
-                // Hardware constraint: the LP-500/700 firmware doesn't
-                // support auto-channel on the Waveform / Spectrum LCD
-                // pages. The meter returns IN reports with undefined
-                // channel + sample bytes in this state, so the trace
-                // we'd render is meaningless and the telemetry slot
-                // garbage. Refuse to render the trace and prompt the
-                // operator to switch to a manual channel — the CH
-                // cycle button is right below.
+                // The Waveform and Spectrum pages have their own CH 1–4
+                // setting and no Auto (LP-500 user guide v5.4). A server
+                // with LP-700-Server PR #9 reports them that way. An
+                // older server reads them as CH Auto whenever Power/SWR
+                // is in CH Auto, and then holds every trace back, so
+                // say that rather than wait forever.
                 if vm.snapshot?.autoChannel == true {
-                    PlaceholderText("Switch to CH 1–4 below. Auto-channel isn't supported on the Waveform LCD page.")
+                    PlaceholderText("No trace: this LP-700-Server reads the page as CH Auto and holds traces back. Update the server.")
                 } else if let scope = vm.lastScope, isFresh(vm.lastScopeAt) {
                     Canvas { ctx, size in
                         drawWaveform(samples: scope.samples, in: size, ctx: ctx)
@@ -58,7 +56,7 @@ struct WaveformView: View {
                     .padding(10)
                     .drawingGroup()
                 } else {
-                    PlaceholderText("Waveform — keep meter on the Waveform LCD page (F1)")
+                    PlaceholderText("Waiting for waveform data from the meter")
                 }
             }
 
