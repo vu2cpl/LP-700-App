@@ -57,7 +57,7 @@ struct PageKeys: Equatable {
     /// Short reason shown under a locked keypad button.
     var lockedSubtitle: String {
         switch lock {
-        case .chAuto: return "Locked (auto-CH)"
+        case .chAuto: return "In CH Auto"
         case .samplePage: return "Power/SWR only"
         case .setupPage: return "Not in Setup"
         case nil: return ""

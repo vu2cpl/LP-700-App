@@ -76,24 +76,33 @@ struct KeypadView: View {
         }
     }
 
+    // Four buttons share the row, so at the default window width each has
+    // only about 55 pt for its text. "LCD Mode" (55.3 pt at 11 pt medium)
+    // and "Power/SWR only" (71.4 pt at 9 pt) were cut off. The tighter
+    // icon and padding give the text about 7 pt more, and both lines
+    // shrink to 80 % before they truncate. The button's own size never
+    // changes, so the row stays put across pages.
     private func keyButton(title: String, systemImage: String, subtitle: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 5) {
+            HStack(spacing: 4) {
                 Image(systemName: systemImage)
                     .font(.system(size: 11))
-                    .frame(width: 14)
+                    .frame(width: 12)
                 VStack(alignment: .leading, spacing: 0) {
                     Text(title)
                         .font(.system(size: 11, weight: .medium))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                     Text(subtitle)
                         .font(.system(size: 9))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                 }
                 Spacer(minLength: 0)
             }
             .padding(.vertical, 2)
-            .padding(.horizontal, 4)
+            .padding(.horizontal, 2)
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(.bordered)
