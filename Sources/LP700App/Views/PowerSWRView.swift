@@ -64,12 +64,18 @@ struct BarConfig: Equatable {
 extension PowerSWRModel {
     /// Builds a model from a snapshot + context flags. Pure function;
     /// safe to call on every `ContentView.body` evaluation.
+    ///
+    /// - Parameter skipAutoChannel: when true, the CH button cycles
+    ///   1 → 2 → 3 → 4 → 1 (no auto). Passed by WaveformView /
+    ///   SpectrumView because the meter's firmware doesn't support
+    ///   auto-channel on those LCD pages.
     static func make(snapshot: Snapshot?,
                      allowControl: Bool,
                      connected: Bool,
-                     setupOpen: Bool) -> PowerSWRModel {
+                     setupOpen: Bool,
+                     skipAutoChannel: Bool = false) -> PowerSWRModel {
         let baseDisabled = !allowControl || !connected || setupOpen
-        let autoCh = snapshot?.autoChannel == true
+        let keys = PageKeys.make(snapshot)
 
         // Always auto-scale the bargraph for the visual display, even
         // when the meter has a manual range set. The meter's range
@@ -100,23 +106,23 @@ extension PowerSWRModel {
             swrBar: makeSwrBar(swr, tint: swrTint),
             scaleLabel: formatScaleLabel(scale),
             controls: ControlsModel(
-                channelLabel: channelLabel(snapshot),
-                nextChannel: nextChannel(snapshot),
+                channelLabel: channelLabel(snapshot, skipAuto: skipAutoChannel),
+                nextChannel: nextChannel(snapshot, skipAuto: skipAutoChannel),
                 rangeLabel: snapshot?.range ?? "—",
                 peakModeLabel: peakModeLabel(snapshot?.peakMode),
                 nextPeakMode: nextPeakMode(snapshot?.peakMode),
                 alarmLabel: alarmLabel(snapshot),
                 alarmTint: alarmTint(snapshot),
-                channelDisabled: baseDisabled,
-                // Range and Alarm are per-channel on the meter, and the
-                // LP-500 user guide v5.4 says of both: "This choice can't
-                // be changed when the CH button is in Auto." Bench-tested
-                // 2026-10-13: F3 / F4 do nothing in CH Auto. (A 2026-05-17
-                // change ungated Range here on a misquote of that page.)
-                rangeDisabled: baseDisabled || autoCh,
-                peakDisabled: baseDisabled,
-                alarmDisabled: baseDisabled || autoCh,
-                lockNote: autoCh ? "Range and Alarm can't be changed in CH Auto. Pick CH 1–4." : nil
+                // Which keys the meter's page allows: Range and Alarm
+                // are locked in CH Auto ("This choice can't be changed
+                // when the CH button is in Auto", LP-500 user guide v5.4;
+                // bench-tested 2026-10-13), and on the Setup page every
+                // key but LCD Mode adjusts a setting. See PageKeys.
+                channelDisabled: baseDisabled || !keys.channel,
+                rangeDisabled: baseDisabled || !keys.range,
+                peakDisabled: baseDisabled || !keys.peak,
+                alarmDisabled: baseDisabled || !keys.alarm,
+                lockNote: keys.cardNote
             ),
             statusMessage: snapshot?.statusMessage ?? ""
         )
@@ -221,20 +227,26 @@ private func autoScale(_ snap: Snapshot?) -> Double {
     return standards.first(where: { $0 >= peak }) ?? 10000
 }
 
-private func channelLabel(_ s: Snapshot?) -> String {
+private func channelLabel(_ s: Snapshot?, skipAuto: Bool = false) -> String {
     guard let s else { return "—" }
-    // In CH Auto, also surface the channel the meter is currently
-    // decoding so the operator can tell which per-channel settings are
-    // active (matches the hardware LCD's "Auto Ch=1" indicator).
-    return s.autoChannel ? "A → \(s.channel)" : "\(s.channel)"
+    if s.autoChannel {
+        // In CH Auto, surface the channel the meter is decoding for
+        // (matches the hardware LCD's "Auto Ch=1" indicator). In
+        // Waveform / Spectrum views the auto-channel state is
+        // hardware-invalid and the trace placeholder already tells
+        // the operator to switch — drop the "A → " prefix there.
+        return skipAuto ? "\(s.channel)" : "A → \(s.channel)"
+    }
+    return "\(s.channel)"
 }
 
-// Cycle order: Auto → 1 → 2 → 3 → 4 → Auto. Server's `channel_step`
-// verb takes 0 = auto, 1..4 = explicit channel.
-private func nextChannel(_ s: Snapshot?) -> Int {
+// Cycle order: Auto (0) → 1 → 2 → 3 → 4 → Auto. With `skipAuto`,
+// 4 wraps to 1 and Auto jumps straight to 1.
+private func nextChannel(_ s: Snapshot?, skipAuto: Bool = false) -> Int {
     guard let s else { return 1 }
     if s.autoChannel { return 1 }
-    return s.channel >= 4 ? 0 : s.channel + 1
+    if s.channel >= 4 { return skipAuto ? 1 : 0 }
+    return s.channel + 1
 }
 
 private func peakModeLabel(_ m: PeakMode?) -> String {
@@ -246,7 +258,6 @@ private func peakModeLabel(_ m: PeakMode?) -> String {
     }
 }
 
-// Cycle order: Peak Hold (0) → Average (1) → Tune (2) → Peak Hold.
 private func nextPeakMode(_ m: PeakMode?) -> Int {
     switch m {
     case .peakHold: return 1
@@ -272,27 +283,19 @@ private func alarmTint(_ s: Snapshot?) -> Color? {
 
 // MARK: - View
 
-// Mirrors the LP-500/700 Power/SWR LCD screen. Avg + Peak power readouts
-// with scale bars, SWR + alarm, and a single Controls card that cycles
-// Channel / Range / Peak-mode / Alarm in place on each press.
+// Mirrors the LP-500/700 Power/SWR LCD screen: Avg + Peak power readouts
+// with scale bars, SWR, and the meter's status message. The Controls
+// card is not part of this view: ContentView places one card below every
+// page so its buttons never move (ControlsCard).
 //
-// The view is `Equatable` over its `model`; the `vm` reference is stable
-// for the lifetime of the window so we treat it as equal regardless. This
-// lets SwiftUI's `.equatable()` short-circuit the entire subtree (cards
-// + bargraphs + ControlsCard) on every parent re-render where displayed
+// The view is `Equatable` over its `model`. This lets SwiftUI's
+// `.equatable()` short-circuit the entire subtree (cards + bargraphs) on
+// every parent re-render where displayed
 // values are unchanged — extremely common after `formatPower` rounds
 // adjacent samples to the same string and the bar fraction quantizes
 // into the same 1 % step.
 struct PowerSWRView: View, Equatable {
     let model: PowerSWRModel
-    // Held by reference; not @ObservedObject (we don't need observation
-    // here — ContentView already observes and rebuilds `model` for us).
-    // Used only to dispatch control verbs from button taps.
-    let vm: MeterViewModel
-
-    static func == (lhs: PowerSWRView, rhs: PowerSWRView) -> Bool {
-        lhs.model == rhs.model && lhs.vm === rhs.vm
-    }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -309,12 +312,6 @@ struct PowerSWRView: View, Equatable {
                                  scaleLabel: model.scaleLabel,
                                  label: model.cardLabel)
                 .equatable()
-
-            ControlsCard(model: model.controls,
-                         onChannelStep: { vm.sendChannelStep($0) },
-                         onRangeStep:   { vm.sendRangeStep() },
-                         onPeakStep:    { vm.sendPeakToggle($0) },
-                         onAlarmToggle: { vm.sendAlarmToggle() })
 
             if !model.statusMessage.isEmpty {
                 Label(model.statusMessage, systemImage: "exclamationmark.bubble")
@@ -494,7 +491,17 @@ private struct PowerBar: View {
 // Reads only Equatable values from the model; closures are constructed
 // fresh by the parent on each re-render but only invoked on user input,
 // so their non-Equatability doesn't cost render work.
-private struct ControlsCard: View {
+//
+// One card for every page, owned by ContentView and placed above the
+// keypad, so its four buttons sit in the same place on Power/SWR,
+// Waveform, Spectrum and Setup (they used to live inside each page view
+// and moved on every page change). A button whose key does another job
+// on the current page stays in its slot, greyed out, and the note line
+// below says why (PageKeys). On Waveform / Spectrum only CH, the page's
+// own CH 1–4, is live: the keys behind Rng / Mode / Alm set V/div or dB
+// range, waveform style or averaging, and sweep or span there, and a
+// Range press changed V/div on the bench (2026-11-19).
+struct ControlsCard: View {
     var model: ControlsModel
     var onChannelStep: (Int) -> Void
     var onRangeStep: () -> Void
@@ -528,7 +535,7 @@ private struct ControlsCard: View {
                 }
             }
             // Always reserve space for the lock note so the card height
-            // doesn't change when the user cycles between CH A and CH 1–4.
+            // doesn't change between pages or between CH A and CH 1–4.
             Text(model.lockNote ?? " ")
                 .font(.system(size: 9))
                 .foregroundStyle(.secondary)
@@ -549,18 +556,26 @@ private struct ControlsCard: View {
 
     private func cycleButton(title: String, value: String, disabled: Bool, valueTint: Color? = nil, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(title)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .fixedSize()
-                Text(value)
+            // The hidden full-size line keeps every button at the same
+            // height when a long value ("250W" at the minimum window width)
+            // shrinks, so the row never changes height between pages.
+            ZStack {
+                Text("0")
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundColor(disabled ? .secondary : (valueTint ?? .accentColor))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
+                    .hidden()
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(title)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .fixedSize()
+                    Text(value)
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundColor(disabled ? .secondary : (valueTint ?? .accentColor))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.horizontal, 8)

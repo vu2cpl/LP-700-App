@@ -19,8 +19,10 @@ the LP-500/700.
 A native Mac window with a standard `NSToolbar` — connection badge on
 the leading side (green/yellow/red dot + host label), a backend pill in
 the principal slot (HID / SIMULATOR), and shield + wrench gear buttons
-trailing. The content area is two `regularMaterial` panels: live
-readouts on top, status row + keypad beneath.
+trailing. The content area is the meter page on top, then the
+Controls card, then a panel with the status row and keypad. The
+Controls card and keypad stay at the same place and size on every
+page; a key the page doesn't use is greyed out in its slot, not hidden.
 
 - **Live telemetry** from the LP-500/700: average power, peak power,
   SWR, range, channel + auto-channel, peak/avg/tune mode, alarm state,
@@ -28,8 +30,27 @@ readouts on top, status row + keypad beneath.
   WebSocket from the server.
 - **Power & SWR mirror** — the meter's main LCD page rendered with
   large numeric readouts, SWR-tinted (green/yellow/red at 1.5 / 2.0
-  thresholds), channel pills (Auto / 1..4), range cycle button, peak
-  mode trio (Peak Hold / Average / Tune), alarm pill.
+  thresholds), and a Controls card with four cycle-on-press buttons:
+  CH (Auto / 1..4), Rng, Mode (Peak Hold / Average / Tune) and Alm.
+  Range and Alarm are greyed out in CH Auto, because the meter can't
+  change them there.
+- **Waveform & Spectrum views** — the meter's other two LCD pages
+  rendered natively. `WaveformView` shows the envelope-scope trace
+  as a mirrored bar plot; `SpectrumView` shows the FFT as a
+  vertical-bar graph (DC bin clipped). Both fed by the server's
+  `scope` / `spectrum` WS frames (~4 Hz while the meter is on the
+  matching page). The app shows whichever page the meter is on;
+  the keypad's Mode button presses the meter's Mode key (Power/SWR →
+  Waveform → Spectrum → Power/SWR). On these pages CH picks the
+  page's own CH 1–4 (the meter offers no Auto there). Needs a server
+  with LP-700-Server PR #9. A compact power strip above the trace shows
+  what the meter's own screen shows on that page: average and peak
+  power on Waveform, one power reading and its dBm on Spectrum. Only CH works on these pages: there the meter's Range,
+  Alarm and Peak keys set V/div, sweep, span and so on, which the
+  server doesn't report yet, so the app greys them out (set them on the
+  meter). In Setup only Mode works. The waveform trace rides
+  through the meter's capture glitches: an empty or torn frame keeps
+  the last clean trace for up to a second.
 - **Control verbs** the server's `/ws` channel accepts:
   `peak_toggle`, `range_step`, `channel_step`, `alarm_toggle`,
   `mode_step`. All gated behind the server's `allow_control` flag.

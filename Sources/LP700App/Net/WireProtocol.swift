@@ -120,11 +120,52 @@ struct Snapshot: Codable, Equatable {
     }
 }
 
+// Scope (waveform) and spectrum sample payloads. The server emits these
+// as separate WS frame types — see ARCHITECTURE.md §4 in the
+// LP-700-Server repo for the wire spec. Values are 0..255 normalised
+// for LCD display height (the firmware auto-scales each trace so its
+// peak fits), NOT absolute watts. For absolute readings, use the
+// matching `telemetry` frame's power_avg_w / power_peak_w.
+//
+// Frame rate is ~4 Hz while the meter is in the matching top_mode
+// (waveform → scope frames, spectrum → spectrum frames). The legacy
+// Power/SWR poll cycle is preserved in the other modes, so scope/spec
+// frames simply stop arriving when the operator switches LCD pages.
+struct ScopePayload: Decodable, Equatable {
+    var topMode: String
+    var channel: Int
+    var autoChannel: Bool
+    var samples: [UInt8]                // length 320
+
+    enum CodingKeys: String, CodingKey {
+        case topMode = "top_mode"
+        case channel
+        case autoChannel = "auto_channel"
+        case samples
+    }
+}
+
+struct SpectrumPayload: Decodable, Equatable {
+    var topMode: String
+    var channel: Int
+    var autoChannel: Bool
+    var bins: [UInt8]                   // length 320
+
+    enum CodingKeys: String, CodingKey {
+        case topMode = "top_mode"
+        case channel
+        case autoChannel = "auto_channel"
+        case bins
+    }
+}
+
 enum ServerFrame: Decodable, Equatable {
     case telemetry(seq: Int, ts: String, data: Snapshot)
     case heartbeat(seq: Int, ts: String)
     case status(level: String, msg: String)
     case ack(ref: String, ok: Bool, reason: String?)
+    case scope(seq: Int, ts: String, data: ScopePayload)
+    case spectrum(seq: Int, ts: String, data: SpectrumPayload)
     case unknown(type: String)
 
     private enum K: String, CodingKey {
@@ -156,6 +197,18 @@ enum ServerFrame: Decodable, Equatable {
                 ref: (try? c.decode(String.self, forKey: .ref)) ?? "",
                 ok: (try? c.decode(Bool.self, forKey: .ok)) ?? false,
                 reason: try? c.decode(String.self, forKey: .reason)
+            )
+        case "scope":
+            self = .scope(
+                seq: (try? c.decode(Int.self, forKey: .seq)) ?? 0,
+                ts: (try? c.decode(String.self, forKey: .ts)) ?? "",
+                data: try c.decode(ScopePayload.self, forKey: .data)
+            )
+        case "spectrum":
+            self = .spectrum(
+                seq: (try? c.decode(Int.self, forKey: .seq)) ?? 0,
+                ts: (try? c.decode(String.self, forKey: .ts)) ?? "",
+                data: try c.decode(SpectrumPayload.self, forKey: .data)
             )
         default:
             self = .unknown(type: type)

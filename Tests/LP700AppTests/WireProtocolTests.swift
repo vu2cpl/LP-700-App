@@ -171,6 +171,70 @@ final class WireProtocolTests: XCTestCase {
                        "tune mode must show power_peak_w")
     }
 
+    // MARK: - Scope / spectrum decode
+
+    func testScopeDecodes() throws {
+        // 320 samples — matches the server-side spec from
+        // ARCHITECTURE.md §4 in LP-700-Server. Generate them inline so
+        // the test JSON stays readable.
+        let samples = (0..<320).map { String($0 % 256) }.joined(separator: ",")
+        let json = """
+        {
+          "type": "scope",
+          "seq": 1001,
+          "ts": "2026-05-15T17:14:25.103Z",
+          "data": {
+            "top_mode": "waveform",
+            "channel": 1,
+            "auto_channel": false,
+            "samples": [\(samples)]
+          }
+        }
+        """.data(using: .utf8)!
+
+        let frame = try JSONDecoder().decode(ServerFrame.self, from: json)
+        guard case .scope(let seq, _, let payload) = frame else {
+            return XCTFail("expected scope")
+        }
+        XCTAssertEqual(seq, 1001)
+        XCTAssertEqual(payload.topMode, "waveform")
+        XCTAssertEqual(payload.channel, 1)
+        XCTAssertFalse(payload.autoChannel)
+        XCTAssertEqual(payload.samples.count, 320)
+        XCTAssertEqual(payload.samples[0], 0)
+        XCTAssertEqual(payload.samples[255], 255)
+        XCTAssertEqual(payload.samples[256], 0)
+    }
+
+    func testSpectrumDecodes() throws {
+        let bins = (0..<320).map { String($0 % 256) }.joined(separator: ",")
+        let json = """
+        {
+          "type": "spectrum",
+          "seq": 1002,
+          "ts": "2026-05-15T17:14:25.347Z",
+          "data": {
+            "top_mode": "spectrum",
+            "channel": 3,
+            "auto_channel": true,
+            "bins": [\(bins)]
+          }
+        }
+        """.data(using: .utf8)!
+
+        let frame = try JSONDecoder().decode(ServerFrame.self, from: json)
+        guard case .spectrum(let seq, _, let payload) = frame else {
+            return XCTFail("expected spectrum")
+        }
+        XCTAssertEqual(seq, 1002)
+        XCTAssertEqual(payload.topMode, "spectrum")
+        XCTAssertEqual(payload.channel, 3)
+        XCTAssertTrue(payload.autoChannel)
+        XCTAssertEqual(payload.bins.count, 320)
+        XCTAssertEqual(payload.bins[0], 0)
+        XCTAssertEqual(payload.bins[100], 100)
+    }
+
     func testRangeNamesMatchServer() {
         // Must mirror RANGE_NAMES in the server's embedded web client
         // (internal/web/static/index.html). If the server's order changes,

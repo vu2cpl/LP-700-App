@@ -127,23 +127,30 @@ public struct LP700StandaloneApp: App {
             .keyboardShortcut("d", modifiers: [.command, .shift])
         }
 
+        // Greyed out where the meter's page gives the key another job
+        // (PageKeys); the view model refuses those presses anyway.
         CommandMenu("Meter") {
             Button("Step Range") { vm.sendRangeStep() }
                 .keyboardShortcut("r", modifiers: [.command])
+                .disabled(!vm.keys.range)
             Divider()
-            Button("Peak Hold") { vm.sendPeakToggle(0) }
-                .keyboardShortcut("1", modifiers: [.command, .shift])
-            Button("Average") { vm.sendPeakToggle(1) }
-                .keyboardShortcut("2", modifiers: [.command, .shift])
-            Button("Tune") { vm.sendPeakToggle(2) }
-                .keyboardShortcut("3", modifiers: [.command, .shift])
+            Group {
+                Button("Peak Hold") { vm.sendPeakToggle(0) }
+                    .keyboardShortcut("1", modifiers: [.command, .shift])
+                Button("Average") { vm.sendPeakToggle(1) }
+                    .keyboardShortcut("2", modifiers: [.command, .shift])
+                Button("Tune") { vm.sendPeakToggle(2) }
+                    .keyboardShortcut("3", modifiers: [.command, .shift])
+            }
+            .disabled(!vm.keys.peak)
             Divider()
             Button("Toggle Alarm") { vm.sendAlarmToggle() }
                 .keyboardShortcut("a", modifiers: [.command])
+                .disabled(!vm.keys.alarm)
             Button("Step LCD Mode") { vm.sendModeStep() }
                 .keyboardShortcut("m", modifiers: [.command])
             Divider()
-            Button("Resync") { vm.resync() }
+            Button("Sync") { vm.resync() }
                 .keyboardShortcut("y", modifiers: [.command])
             Button(vm.setupOpen ? "Close Setup" : "Open Setup") { vm.toggleSetup() }
                 .keyboardShortcut(".", modifiers: [.command])

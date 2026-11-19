@@ -61,11 +61,16 @@ LP-700-App/
 │   │   ├── ProxyAuth.swift             # Basic-auth header rule (https/wss only) + 401 → ProxyAuthError
 │   │   └── ProxyKeychain.swift         # "ShackProxy" Keychain item + in-memory ProxyLoginStore
 │   ├── ViewModels/
-│   │   └── MeterViewModel.swift        # @MainActor source-of-truth
+│   │   ├── MeterViewModel.swift        # @MainActor source-of-truth
+│   │   ├── PageKeys.swift              # which meter keys each LCD page allows (CH / Rng / Mode / Alm)
+│   │   └── ScopeTraceHold.swift        # keeps the last clean waveform trace through capture glitches
 │   ├── Views/
-│   │   ├── ContentView.swift           # toolbar + body composition + bottom CompactPanel (status + keypad)
-│   │   ├── PowerSWRView.swift          # PowerSWRCombinedCard (mode-driven big readout + Avg/Pk/Ref + 3 graduated bars) + ControlsCard
-│   │   ├── KeypadView.swift            # inline keypad row (Range / Alarm / LCD Mode / Resync)
+│   │   ├── ContentView.swift           # toolbar + page area + pinned ControlsCard + bottom CompactPanel (status + keypad)
+│   │   ├── PowerSWRView.swift          # PowerSWRCombinedCard (mode-driven big readout + Avg/Pk/Ref + 3 graduated bars) + ControlsCard type
+│   │   ├── KeypadView.swift            # inline keypad row (Range / Alarm / Mode / Sync), one title size for all
+│   │   ├── WaveformView.swift          # scope trace (Canvas) for the meter's Waveform page
+│   │   ├── SpectrumView.swift          # FFT bars (Canvas) for the meter's Spectrum page
+│   │   ├── SampleViewShared.swift      # PowerStrip + PlaceholderText shared by the two views above
 │   │   ├── ConnectionSheet.swift       # first-launch sheet (Cmd+K)
 │   │   ├── PreferencesView.swift       # Settings scene (Cmd+,)
 │   │   ├── SetupOverlay.swift          # log-level picker + backend annotation
@@ -76,7 +81,10 @@ LP-700-App/
 │   ├── WireProtocolTests.swift         # decode/encode round-trips + RangeNames canary
 │   ├── UpdateCheckerTests.swift        # version compare, automatic-check rule, dev skip
 │   ├── ServerURLTests.swift            # configuredServerURL rule shared by the 3 entry points
-│   ├── ControlsGateTests.swift         # Range / Alarm greyed out in CH Auto, usable on CH 1–4
+│   ├── ControlsGateTests.swift         # PageKeys per page: CH Auto, CH 1–4, Waveform/Spectrum, Setup, no snapshot
+│   ├── ScopeTraceHoldTests.swift       # torn / empty scope frames hold the last clean trace for 1 s
+│   ├── PowerStripTests.swift           # Spectrum strip's dBm matches the meter's LCD
+│   ├── ModeFollowTests.swift           # view follows top_mode; LCD Mode press skips Setup only if it lands there
 │   ├── WSClientReconnectTests.swift    # retry after a refused connection; stop() drops the retry
 │   └── ProxyAuthTests.swift            # header only over TLS, base64, 401 required/rejected, local 401 stub
 ├── Resources/Info.plist                # bundle template (__VERSION__ substituted)
@@ -199,7 +207,8 @@ it. The in-process `LP700Plugin.manifest` version is not used by the Suite.
   card's `Rng` / `Alm` and the keypad's Range / Alarm are greyed out
   whenever `auto_channel == true`, with a secondary-grey note under the
   Controls card; CH and Mode stay usable so the operator can leave
-  Auto. `ControlsGateTests` pins this. History: the 2026-05-09 gate was
+  Auto. `PageKeys.make` holds this rule together with the per-page
+  ones below, and `ControlsGateTests` pins it. History: the 2026-05-09 gate was
   right; a 2026-05-17 "misread probe" correction misquoted the manual,
   ungated Range in the Controls card and reverted the server's NACK
   (LP-700-Server PR #3). Both are undone: this repo's PR #24 restored the
@@ -218,6 +227,45 @@ it. The in-process `LP700Plugin.manifest` version is not used by the Suite.
   `VStack` (the previous `ScrollView` blocked `.windowResizability(.contentMinSize)`
   from computing a proper floor); status row (Coupler / Power / Top
   / FW) sits above the `KeypadView` keypad row in a single `CompactPanel`.
+- **The Controls card and keypad never move between pages.**
+  `ContentView.meterPane` owns the `ControlsCard`, not the page views:
+  the page area (`PowerSWRView` / `WaveformView` / `SpectrumView`) is a
+  flexible frame, and the Controls card and keypad panel sit below it at
+  the same place and size on every page. The card always shows all four
+  buttons; a key the page doesn't allow is greyed out in its slot with
+  a one-line note under the card (`PageKeys.cardNote`), never hidden.
+  This is the shack-wide UI rule (Manoj, 2026-11-19, in his global
+  CLAUDE.md): before calling UI work done, switch through every page
+  and check the shared buttons don't move. Until 0a20fe0 each page
+  embedded its own card (the sample pages a 2-button one), so the card
+  and keypad jumped on every page change. Button heights are fixed (a
+  hidden full-size line in each Controls button, a fixed label height in
+  the keypad), so a long or shrunken label can't make a button or a row
+  taller or shorter on some page.
+- **Keypad titles: one size for all four, as big as fits** (Manoj,
+  2026-11-19). The keypad shows Range / Alarm / Mode / Sync as single
+  lines in the Controls card's value font (15 pt semibold rounded, like
+  "A → 1"). `ViewThatFits` steps all four down together, a point at a
+  time to 11 pt, only when the window is too narrow; each button
+  reserves the widest title's room, because the row splits its width
+  equally ("Range" was cut off when only the row total was checked).
+  No small second lines: they repeated the Controls card (range, alarm
+  state), its lock note, and the status row's Top field (the page).
+  Never size one key's title on its own: Manoj found a big "Mode" next
+  to small titles "horrible". "Mode" is the LCD page key (F1), "Sync"
+  re-requests a snapshot (`vm.resync()`); the Meter menu says "Sync" too.
+- **Every key is gated by the meter's page (`PageKeys`).** Each app
+  control is a raw key press (Mode = F1, CH = F2, Range = F3,
+  Alarm = F4, Peak/Avg/Tune = F5), and the meter gives F2–F5 another
+  job on each page: Waveform F3/F4/F5 = V/div / Sweep / Wfm Style,
+  Spectrum = dB range / Span / Averaging, Setup = Scroll / Adj Dn /
+  Adj Up (F2 picks the channel being adjusted). A Range press on the
+  Waveform page changed V/div on the bench (2026-11-19), and in Setup
+  Alarm or Peak/Avg/Tune could change a setting such as the coupler type. So `PageKeys.make(snapshot)`
+  allows CH only on Waveform/Spectrum, nothing but Mode (F1) in Setup,
+  and everything but Range/Alarm in CH Auto. The Controls card, the
+  keypad, the Meter menu and the `MeterViewModel.send…` guards all read
+  `vm.keys`, so no path can press a key the page doesn't allow.
 - **Hardware-style combined Power & SWR card** (v0.3.x). One unified
   card replaces the previous Avg / Peak / SWR triple. Layout: a single
   big mode-driven power number (Hold → Peak orange, Avg → Avg cyan,
@@ -258,6 +306,61 @@ it. The in-process `LP700Plugin.manifest` version is not used by the Suite.
   height: 580)`. `.windowResizability(.contentMinSize)` so the user
   can grow the window past the content floor but never shrink it
   below the readable minimum.
+- **Scope (Waveform) and Spectrum views.** Server v0.1.6+ emits two
+  new WS frame types — `scope` and `spectrum` — each carrying a 320-
+  element `[UInt8]` buffer at ~4 Hz while the meter is on the matching
+  LCD page. `MeterViewModel.lastScope` / `lastSpectrum` cache the most
+  recent payload; `WaveformView` and `SpectrumView` render the buffers
+  via SwiftUI `Canvas` (mirrored mid-line plot in cyan for waveform;
+  vertical-bar FFT in green for spectrum, with the DC bin clipped to
+  the rest-99th-percentile so it doesn't squash dynamic range).
+  `PowerStrip` shows the live numerics above the trace because sample
+  values are display-normalised (0..255), not absolute watts. It shows
+  what the meter's LCD shows on that page, never SWR (the meter shows
+  none on either page): Waveform = Avg + Pk; Spectrum = one "Pwr"
+  reading (`power_peak_w`, the meter's total peak power summed over the
+  frequency bins) and its dBm. On the Spectrum page the meter sends no
+  average, its SWR bytes hold something else, and its power comes in
+  0.018 W steps, which the server decodes (LP-700-Server
+  `spectrumWattsPerStep`; an older server shows about 11× too much
+  there). Bench 2026-11-19: LCD 185 W / +52 dBm and 5 W / +37 dBm.
+- **The view follows the meter's LCD page.** `MeterViewModel.activeView`
+  (`powerSWR` / `waveform` / `spectrum`) is set from `top_mode` on every
+  telemetry frame (`MeterViewModel.activeView(for:)`; Setup shows
+  Power/SWR). The keypad's Mode button only presses the meter's Mode key once
+  and changes nothing locally. The LP-500 guide gives that key a 3-page
+  cycle (Power/SWR → Waveform → Spectrum; Setup has its own key), so no
+  double press. `ModeStepTracker` sends one more press only if a press
+  from the app is seen to land on Setup within 2 s. `ModeFollowTests`
+  pins both. History: until 2026-11-19 the view was user-driven and only
+  seeded once, because the server's telemetry flapped between pages
+  (fixed in LP-700-Server PR #9), and the Spectrum wrap sent two
+  presses for a "4-page cycle"; on the bench that left the app on
+  Waveform while the meter showed Spectrum.
+- **The Waveform / Spectrum pages have their own CH 1–4, never Auto.**
+  LP-500 guide v5.4: "CH Auto is not offered in the 'scope mode … The
+  channel selection for the 'scope mode is independent of the Power/SWR
+  mode" (same for Spectrum). On these pages the CH button (F2) cycles
+  1 → 2 → 3 → 4 → 1. A server with LP-700-Server PR #9 reports
+  `auto_channel: false` and the page's channel there; older servers read
+  them as CH Auto whenever Power/SWR is in CH Auto and hold every trace
+  back. The views keep an `autoChannel` placeholder only for that case,
+  and it says to update the server. (An earlier note here called Auto
+  "hardware-invalid" on these pages; that was a misreading.) Only CH is
+  live there (see `PageKeys` above). The server doesn't report V/div,
+  sweep, span or averaging, so the app can't offer those keys yet (see
+  the wfm-spec-fkeys handover on the server fork); each view's footnote
+  says they are set on the meter.
+- **Waveform trace hold (`ScopeTraceHold`).** The meter re-arms its
+  capture between the server's five 64-sample segment reads, so about a
+  quarter of keyed frames arrive all zero or torn (one capture's
+  segments next to the next's). A real envelope is smooth: neighbouring
+  samples differ by ≤ 1, also across segment edges. A frame that is all
+  zero or jumps by more than 8 at a segment edge keeps the last clean
+  trace on screen for up to 1 s; after that whatever arrives is drawn,
+  so key-up still goes flat within a second. Waveform only: spectrum
+  bins are not smooth, and no spectrum glitches were seen.
+  `ScopeTraceHoldTests` pins the shapes seen on the bench (2026-11-19).
 
 - **Three entry points, one connect rule.** The standalone window
   (`LP700StandaloneApp.bootstrap()`), the in-process plugin
