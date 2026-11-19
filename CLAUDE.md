@@ -202,8 +202,12 @@ it. The in-process `LP700Plugin.manifest` version is not used by the Suite.
   Auto. `ControlsGateTests` pins this. History: the 2026-05-09 gate was
   right; a 2026-05-17 "misread probe" correction misquoted the manual,
   ungated Range in the Controls card and reverted the server's NACK
-  (LP-700-Server PR #3), so the server currently forwards these verbs
-  in CH Auto and the meter ignores them. Don't ungate them again.
+  (LP-700-Server PR #3). Both are undone: this repo's PR #24 restored the
+  gate, and LP-700-Server PR #6 (in v0.2.6) restored the NACK, so a
+  server from v0.2.6 on rejects `range_step` / `alarm_toggle` in CH Auto
+  ("Range can't be changed in CH Auto; select CH 1-4"). Older servers
+  forward them and the meter ignores them, so the app gate stays the
+  primary guard. Don't ungate them again.
 - **Single Controls card with cycle-on-press buttons.** As of the v0.3
   redesign, `PowerSWRView` no longer has separate Channel pills, a
   Range card, a Peak-mode segmented control, and an Alarm card. They

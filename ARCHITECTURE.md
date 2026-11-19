@@ -223,8 +223,9 @@ Specifics worth calling out:
   Disabled when `!allowControl || connection != .connected || setupOpen`.
   Range and Alarm additionally grey out when `auto_channel == true`,
   here and in `ControlsCard` (the LP-500 user guide says neither can
-  be changed in CH Auto, and a 2026-10-13 bench test agrees; the
-  server no longer NACKs them, so the gate lives in the app).
+  be changed in CH Auto, and a 2026-10-13 bench test agrees). The
+  server NACKs both in CH Auto again from LP-700-Server v0.2.6, but
+  older servers forward them, so the app gate stays the primary guard.
 - `SetupOverlay` is rendered into the same panel area when
   `vm.setupOpen` is true, replacing `PowerSWRView`. Same compositional
   choice as the embedded web client (which switches to a `<dialog>`).
