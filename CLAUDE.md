@@ -341,7 +341,7 @@ it. The in-process `LP700Plugin.manifest` version is not used by the Suite.
   LP-500 guide v5.4: "CH Auto is not offered in the 'scope mode … The
   channel selection for the 'scope mode is independent of the Power/SWR
   mode" (same for Spectrum). On these pages the CH button (F2) cycles
-  1 → 2 → 3 → 4 → 1. A server with LP-700-Server PR #9 reports
+  1 → 2 → 3 → 4 → 1. LP-700-Server v0.2.7 and later (PR #9) report
   `auto_channel: false` and the page's channel there; older servers read
   them as CH Auto whenever Power/SWR is in CH Auto and hold every trace
   back. The views keep an `autoChannel` placeholder only for that case,
